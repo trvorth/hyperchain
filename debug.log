@@ -1,0 +1,8 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.31s
+     Running `target/debug/start_node -- debug`
+[2025-05-07T20:13:04Z INFO  start_node] Starting Hyperchain node
+error: unexpected argument 'debug' found
+
+Usage: start_node [OPTIONS]
+
+For more information, try '--help'.

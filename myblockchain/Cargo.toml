@@ -1,0 +1,73 @@
+[package]
+name = "my-blockchain"
+version = "0.2.0"
+edition = "2021"
+authors = ["Trevor <thieuquangphu@icloud.com>"]
+description = "An advanced blockchain implementation with innovative DAG-based consensus and cryptographic enhancements for HyperDAG"
+license = "MIT"
+readme = "README.md"
+keywords = ["blockchain", "dag", "cryptography", "scalability", "rust"]
+categories = ["cryptography", "network-programming"]
+repository = "https://github.com/trvorth/hyperchain"
+exclude = ["target/", "tests/data/"]
+
+[dependencies]
+# Core blockchain and networking
+tokio = { version = "1.45.0", features = ["full", "time", "macros"] }
+log = "0.4.22"
+env_logger = "0.11.8"
+hex = "0.4.3"
+sha3 = "0.10.8"
+ed25519-dalek = { version = "2.1.1", features = ["rand_core", "batch"] }
+nalgebra = "0.33.0"
+regex = "1.10.6"
+rand = "0.8.5"
+rayon = "1.10.0"
+dashmap = "6.0.1"
+lru = "0.12.5"
+rocksdb = "0.22.0"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.132"
+chrono = "0.4.38"
+prometheus = { version = "0.13.3", optional = true }
+tracing = "0.1.40"
+tracing-subscriber = "0.3.18"
+lazy_static = "1.5.0"
+
+# Advanced cryptography and zero-knowledge proofs
+blake3 = "1.5.3"
+aes-gcm = "0.10.3"
+argon2 = "0.5.3"
+zeroize = "1.8.1"
+bellman = { version = "0.14.0", optional = true }
+bls12_381 = { version = "0.8.0", optional = true }
+ocl = { version = "0.19.6", optional = true }
+
+# Rate limiting and backoff
+governor = "0.10.0"
+backoff = { version = "0.4.0", features = ["futures", "tokio"] }
+
+[dev-dependencies]
+proptest = "1.4.0"
+criterion = { version = "0.5.1", features = ["html_reports"] }
+
+[features]
+default = []
+zk = ["bellman", "bls12_381"]
+gpu = ["ocl"]
+metrics = ["prometheus"]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+
+[[bench]]
+name = "blockchain_benchmarks"
+harness = false
+
+[lib]
+name = "my_blockchain"
+path = "src/lib.rs"
+crate-type = ["staticlib", "cdylib"]
