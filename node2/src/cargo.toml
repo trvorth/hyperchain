@@ -1,0 +1,3 @@
+[[bin]]
+name = "hyperdag_testnet"
+path = "src/bin/hyperdag_testnet.rs"

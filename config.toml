@@ -1,0 +1,22 @@
+p2p_address = "/ip4/127.0.0.1/tcp/30333"
+local_full_p2p_address = "/ip4/127.0.0.1/tcp/30333/p2p/12D3KooWKVnELCuV69CoMh7KT1X3dMg5tnaYTsi8RPSPmvjNj5XL"
+api_address = "127.0.0.1:8080"
+peers = []
+genesis_validator = "2119707c4caf16139cfb5c09c4dcc9bf9cfe6808b571c108d739f49cc14793b9"
+target_block_time = 6000
+difficulty = 1000
+max_amount = 10000000000
+use_gpu = false
+zk_enabled = false
+mining_threads = 4
+num_chains = 2
+mining_chain_id = 0
+
+[logging]
+level = "info"
+
+[p2p]
+heartbeat_interval = 500
+mesh_n = 4
+mesh_n_low = 1
+mesh_n_high = 8
