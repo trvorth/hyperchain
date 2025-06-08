@@ -1,3 +1,21 @@
+# Compiled Rust artifacts and logs
 target/
+Cargo.lock
+
+# Node.js dependencies
 web/node_modules/
 web/package-lock.json
+
+# Runtime node data
+node*/
+
+# Sensitive keys, certificates, and secrets
+*.key
+*.pem
+keypair.txt
+private_key.txt
+
+# IDE and OS files
+.idea/
+.vscode/
+.DS_Store
