@@ -1,21 +1,48 @@
-# Compiled Rust artifacts and logs
-target/
-Cargo.lock
+# Binaries for programs
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
 
-# Node.js dependencies
-web/node_modules/
-web/package-lock.json
+# Generated object files and archives
+*.o
+*.a
 
-# Runtime node data
-node*/
+# Package management
+# Vendored dependencies
+/vendor/
 
-# Sensitive keys, certificates, and secrets
-*.key
-*.pem
-keypair.txt
-private_key.txt
+# Go module cache (usually in GOPATH/pkg/mod)
+# This isn't usually in the project directory, but good to note.
 
-# IDE and OS files
+# Log files
+*.log
+
+# Certs (example, modify as needed)
+cert.pem
+key.pem
+
+# Local configuration (example, modify as needed)
+config.local.json
+
+# IDE and editor files
 .idea/
 .vscode/
+*.sublime-project
+*.sublime-workspace
 .DS_Store
+Thumbs.db
+
+# Temporary files
+*~
+#*#
+.*.swp
+.*.swo
+*.bak
+*.tmp
+
+# Build outputs
+/bin/
+/pkg/
