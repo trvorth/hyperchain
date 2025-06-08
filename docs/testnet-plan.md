@@ -68,8 +68,8 @@ The Ignition testnet is designed to achieve the following key objectives:
 ### **Validator Node Hardware (Recommended Minimum):**
 
 * **CPU:** 4-Core / 8-Thread CPU @ 3.0 GHz+ (e.g., Intel Core i7-8700, AMD Ryzen 5 3600\)  
-* **RAM:** 16 GB DDR4  
-* **Storage:** 1 TB High-Speed NVMe SSD (to accommodate state growth)  
+* **RAM:** 8 GB DDR4  
+* **Storage:** 256 GB High-Speed NVMe SSD (to accommodate state growth)  
 * **Network:** 100 Mbps symmetric connection with a public, static IP address.
 
 ### **Network Connection Details:**
