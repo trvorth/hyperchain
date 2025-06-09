@@ -48,23 +48,21 @@ impl Consensus {
             return Err(ConsensusError::InvalidBlockSize);
         }
         if block.transactions.len() > self.max_transactions_per_block {
-            return Err(ConsensusError::InvalidBlockStructure); // Or a more specific error like TooManyTransactions
+            return Err(ConsensusError::InvalidBlockStructure); 
         }
         for tx in &block.transactions {
-            if serde_json::to_vec(&tx) // Check if tx itself is too large
-                .map_err(|_| ConsensusError::InvalidTransaction)? // Error during tx serialization
+            if serde_json::to_vec(&tx) 
+                .map_err(|_| ConsensusError::InvalidTransaction)? 
                 .len()
                 > self.max_transaction_size
             {
                 return Err(ConsensusError::InvalidTransactionSize);
             }
-            // dag.validate_transaction expects &HashMap, not &RwLockReadGuard
             let utxos_read_guard = utxos.read().await;
             if !dag.validate_transaction(tx, &*utxos_read_guard) {
                 return Err(ConsensusError::InvalidTransaction);
             }
         }
-        // dag.is_valid_block also needs access to utxos, it takes &Arc<RwLock<HashMap<String, UTXO>>>
         if !dag.is_valid_block(block, utxos).await.map_err(|_| ConsensusError::InvalidBlockStructure)? {
             return Err(ConsensusError::InvalidBlockStructure);
         }
