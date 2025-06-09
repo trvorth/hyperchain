@@ -2,7 +2,7 @@
 
 Author: trvorth | HyperChain Project
 
-Date: June 7, 2025
+Date: June 9, 2025
 
 #### **Abstract**
 
@@ -30,10 +30,11 @@ The core design philosophy of HyperChain is that a single, monolithic ledger arc
 
 #### **2.2. The Heterogeneous Ledger Model**
 
-The framework supports two primary types of constituent chains:
+The framework supports two primary types of constituent chains, both managed within the unified protocol core:
 
-* **Dynamic DAG Shards**: Based on the hyperdag.rs implementation, these chains are structured as Directed Acyclic Graphs to maximize transactional throughput via parallel block processing. They are optimized for high-frequency, simple value transfers.  
-* **Execution Chains**: Based on the myblockchain/src/lib.rs implementation, these are independent, linearly-ordered chains designed to support more complex operations or specific applications, potentially including Turing-complete smart contracts.
+* **Dynamic DAG Shards**: Structured as Directed Acyclic Graphs to maximize transactional throughput via parallel block processing. They are optimized for high-frequency, simple value transfers.
+
+* **Execution Chains**: These are independent, linearly-ordered chains designed to support more complex operations or specific applications, potentially including Turing-complete smart contracts, and are secured by the unique Reliable Hashing Algorithm (RHA).
 
 #### **2.3. Specification: Dynamic DAG Shards**
 
@@ -91,7 +92,8 @@ The protocol mandates quantum-resistant signatures for all validator attestation
 
 #### **4.4. Privacy-Preserving Technologies**
 
-* **Homomorphic Encryption:** The HomomorphicEncrypted struct specification outlines a design for integrating a scheme such as BGV \[16\] or BFV \[17\]. This would allow for the validation of transaction sums on-chain without decrypting the constituent amounts, significantly enhancing user privacy.  
+* **Homomorphic Encryption:** The HomomorphicEncrypted struct specification outlines a design for integrating a scheme such as BGV \[16\] or BFV \[17\]. This would allow for the validation of transaction sums on-chain without decrypting the constituent amounts, significantly enhancing user privacy.
+
 * **Zero-Knowledge Proofs:** The protocol includes specifications for ZK-proofs, with a UtxoCircuit defined using the Bellman library. This circuit is designed to generate a zk-SNARK \[32\], based on foundational research in interactive proof systems \[33\], to prove properties of a UTXO without revealing the UTXO's specific data, enabling confidential transactions.
 
 ### **5\. Economic Model and Incentive Engineering**
@@ -140,9 +142,12 @@ This paper has provided a formal specification for HyperChain, a DLT protocol ar
 
 Future work will proceed along several research vectors:
 
-1. **Cryptography Implementation:** Replacing the placeholder cryptographic stubs with audited, production-grade implementations of CRYSTALS-Dilithium and a selected zero-knowledge proof system like Groth16 \[32\].  
-2. **Smart Contract Engine:** Developing a secure and efficient WebAssembly (Wasm) based execution engine, drawing lessons from existing Wasm-based blockchain VMs \[36\].  
-3. **Formal Verification:** Applying formal methods and model checking tools like TLA+ or Coq to rigorously prove the safety and liveness properties of the PoW-DF consensus protocol under various adversarial assumptions \[37, 38, 52\].  
+1. **Cryptography Implementation:** Replacing the placeholder cryptographic stubs with audited, production-grade implementations of CRYSTALS-Dilithium and a selected zero-knowledge proof system like Groth16 \[32\].
+
+2. **Smart Contract Engine:** Developing a secure and efficient WebAssembly (Wasm) based execution engine, drawing lessons from existing Wasm-based blockchain VMs \[36\].
+
+3. **Formal Verification:** Applying formal methods and model checking tools like TLA+ or Coq to rigorously prove the safety and liveness properties of the PoW-DF consensus protocol under various adversarial assumptions \[37, 38, 52\].
+
 4. **Economic Modeling:** Developing a comprehensive game-theoretic model \[39, 40\] of the dynamic sharding mechanism to analyze its strategic stability and resistance to economic attacks.
 
 ### **9\. References**
@@ -254,4 +259,3 @@ Future work will proceed along several research vectors:
 \[53\] Zamfir, V., et al. (2018). Introducing the Beacon Chain. Ethereum Blog.
 
 \[54\] Pass, R., & Shi, E. (2017). Hybrid consensus: Efficient consensus in the permissionless model. In 31st International Symposium on Distributed Computing (DISC 2017).
-
