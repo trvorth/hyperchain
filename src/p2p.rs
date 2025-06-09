@@ -1,7 +1,7 @@
 use crate::hyperdag::{HyperBlock, HyperDAG, LatticeSignature};
 use crate::mempool::Mempool;
 use crate::transaction::{Transaction, UTXO};
-use crate::node::PeerCache; // Import the PeerCache struct
+use crate::node::PeerCache; 
 use futures::stream::StreamExt;
 use governor::{Quota, RateLimiter, state::keyed::DashMapStateStore, clock::DefaultClock};
 use hmac::{Hmac, Mac};
@@ -677,7 +677,7 @@ impl P2PServer {
                     }
                 }
             }
-        } // existing_blocks_guard dropped
+        } 
 
         for block in blocks_to_add_valid {
             if let Err(e) = dag_write_lock.add_block(block.clone(), &utxos_arc).await {
@@ -686,7 +686,7 @@ impl P2PServer {
                 added_blocks_count += 1;
             }
         }
-        drop(dag_write_lock); // dag_write_lock dropped
+        drop(dag_write_lock); 
 
         let mut utxos_write_lock = match timeout(Duration::from_millis(500), utxos_arc.write()).await {
             Ok(guard) => guard,
