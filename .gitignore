@@ -52,3 +52,9 @@ Thumbs.db
 /wallet.key
 /private_key.txt
 /keypair.txt
+
+# Ignore sensitive key and wallet files
+*.key
+*.txt
+/node*/**/hyperdag_db/
+*.log
