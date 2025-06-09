@@ -49,3 +49,6 @@ Thumbs.db
 
 /Cargo.lock
 /hyperdag_db
+/wallet.key
+/private_key.txt
+/keypair.txt
