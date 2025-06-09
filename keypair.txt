@@ -1,0 +1,3 @@
+private key: 6f78afdb0f327138a62b84eed4452c95df20a5cacdfa7c4d12219208bd2601f4
+public address (genesis validator): 2119707c4caf16139cfb5c09c4dcc9bf9cfe6808b571c108d739f49cc14793b9
+

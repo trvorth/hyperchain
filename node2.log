@@ -1,6 +1,0 @@
-    Blocking waiting for file lock on package cache
-    Blocking waiting for file lock on package cache
-    Blocking waiting for file lock on package cache
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.63s
-     Running `target/debug/hyperdag_node2`
-Error: Config("Private key not found: Configuration error: Failed to read private_key.txt: No such file or directory (os error 2)")

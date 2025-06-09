@@ -27,7 +27,7 @@ For a comprehensive academic and technical overview, please refer to the officia
 ## Project Structure
 
 The `hyperchain` repository is a Cargo workspace containing two primary crates:
-* `hyperdag/`: The core implementation of the DAG shards, P2P networking, consensus, and node runtime.
+* `src/`: The core implementation of the DAG shards, P2P networking, consensus, and node runtime.
 * `myblockchain/`: The implementation for the linear Execution Chains, featuring the unique Reliable Hashing Algorithm (RHA).
 
 ## Prerequisites
@@ -38,26 +38,61 @@ To build and run a HyperChain node, you will need to have the following installe
     ```bash
     curl --proto '=https' --tlsv1.2 -sSf [https://sh.rustup.rs](https://sh.rustup.rs) | sh
     ```
-* **Build Essentials**: A C++ compiler and standard development libraries are required for dependencies like RocksDB.
+* **Git**: Required for cloning the repository.
+* **Build Dependencies**: A C++ compiler and the RocksDB library are required. Please follow the instructions specific to your operating system below.
+
+## Build Instructions (Linux & macOS)
+
+1.  **Install Build Essentials**:
     * **Debian/Ubuntu**: `sudo apt-get update && sudo apt-get install build-essential clang librocksdb-dev`
     * **macOS (with Homebrew)**: `xcode-select --install && brew install rocksdb`
     * **Fedora/CentOS**: `sudo dnf groupinstall "Development Tools" && sudo dnf install rocksdb-devel`
-* **Git**: Required for cloning the repository.
 
-## Build Instructions
-
-1.  **Clone the Repository:**
+2.  **Clone and Compile**:
     ```bash
     git clone [https://github.com/trvorth/hyperchain.git](https://github.com/trvorth/hyperchain.git)
     cd hyperchain
-    ```
-
-2.  **Compile the Node in Release Mode:**
-    This command builds all crates in the workspace. The primary executable for running a node is `hyperdag`.
-    ```bash
     cargo build --release
     ```
-    The compiled binary will be located at `target/release/hyperdag`.
+
+## Build Instructions (Windows)
+
+Building on Windows requires the MSVC C++ toolchain and manual installation of RocksDB via `vcpkg`.
+
+1.  **Install Microsoft C++ Build Tools**:
+    * Download the [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/).
+    * Run the installer and select the **"C++ build tools"** workload. Make sure the latest Windows SDK and English language pack are included.
+
+2.  **Install and Configure `vcpkg`**:
+    * Open PowerShell and clone the `vcpkg` repository.
+        ```powershell
+        git clone [https://github.com/Microsoft/vcpkg.git](https://github.com/Microsoft/vcpkg.git)
+        cd vcpkg
+        ./bootstrap-vcpkg.bat
+        ./vcpkg integrate install
+        ```
+
+3.  **Install RocksDB via `vcpkg`**:
+    * Use `vcpkg` to install the required 64-bit RocksDB library. This may take some time.
+        ```powershell
+        ./vcpkg.exe install rocksdb:x64-windows
+        ```
+
+4.  **Set Environment Variables**:
+    * You must set an environment variable to tell Cargo where to find the RocksDB library files. Open PowerShell as an **Administrator** and run the following command (adjust the path if you installed `vcpkg` elsewhere):
+        ```powershell
+        [System.Environment]::SetEnvironmentVariable('ROCKSDB_LIB_DIR', 'C:\path\to\vcpkg\installed\x64-windows\lib', [System.EnvironmentVariableTarget]::Machine)
+        ```
+    * **IMPORTANT**: You will need to **restart your terminal or IDE** for this environment variable to take effect.
+
+5.  **Clone and Compile**:
+    * Open a **new** terminal window.
+    ```bash
+    git clone [https://github.com/trvorth/hyperchain.git](https://github.com/trvorth/hyperchain.git)
+    cd hyperchain
+    cargo build --release
+    ```
+The compiled binary will be located at `target/release/hyperdag.exe`.
 
 ## Running a Node: A Quick Start Guide
 
@@ -78,7 +113,11 @@ To build and run a HyperChain node, you will need to have the following installe
 3.  **Launch the Node:**
     Start the HyperChain node, pointing it to your configuration file.
     ```bash
-    ./target/release/hyperdag --config-path config.toml
+    # On Linux/macOS
+    cargo run --bin hyperdag --config-path config.toml
+
+    # On Windows
+    cargo run --bin hyperdag --config-path config.toml
     ```
     Your node will initialize, start its P2P services, and attempt to connect to peers or begin mining the genesis block if it's the first node.
 
