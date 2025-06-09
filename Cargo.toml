@@ -8,8 +8,7 @@ license = "MIT"
 
 [dependencies]
 # Core blockchain and networking
-my-blockchain = { path = "myblockchain" }
-libp2p = { version = "0.54.1", features = ["tcp", "tokio", "noise", "gossipsub", "yamux", "mdns", "macros", "identify", "ping", "kad"] } # Add "kad"
+libp2p = { version = "0.55.0", features = ["tcp", "tokio", "noise", "gossipsub", "yamux", "mdns", "macros", "identify", "ping", "kad"] }
 futures = "0.3.31"
 tokio = { version = "1.45.0", features = ["full", "test-util"] }
 axum = { version = "0.7.9", features = ["macros"] }
@@ -43,7 +42,7 @@ log = "0.4.22"
 env_logger = "0.11.8"
 tracing = "0.1.40"
 tracing-subscriber = "0.3.18"
-prometheus = "0.13.3"
+prometheus = { version = "0.13.4", default-features = false, features = ["process"] }
 
 # Utilities and performance
 chrono = "0.4.38"
@@ -70,7 +69,7 @@ nonzero_ext = "0.3.0"
 backoff = { version = "0.4.0", features = ["futures", "tokio"] }
 
 # Environment and secrets
-dotenv = "0.15.0"
+dotenvy = "0.15.7"
 rpassword = "7.2.0"
 
 # Async traits
