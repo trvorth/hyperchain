@@ -68,6 +68,7 @@ Thumbs.db
 /wallet.key
 /private_key.txt
 /keypair.txt
+/sync_wallet.sh
 
 # Ignore sensitive key and wallet files
 *.key
