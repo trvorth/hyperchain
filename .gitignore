@@ -14,8 +14,24 @@
 # Vendored dependencies
 /vendor/
 
-# Go module cache (usually in GOPATH/pkg/mod)
-# This isn't usually in the project directory, but good to note.
+# macOS specific files
+.DS_Store
+
+# Wallet and Key Files (CRITICAL - DO NOT COMMIT)
+*.key
+*.txt # Be careful with this, only if you're sure all .txt files should be ignored
+keypair.txt
+node1/node1_wallet.key
+node1/private_key.txt
+node2/node2_wallet.key
+node2/private_key.txt
+node3/node3_wallet.key
+node3/private_key.txt
+private_key.txt
+wallet.key
+
+# Build output directories
+target/
 
 # Log files
 *.log
@@ -58,3 +74,12 @@ Thumbs.db
 *.txt
 /node*/**/hyperdag_db/
 *.log
+*temp*
+.env*
+
+# Rust
+/target
+
+# Node/Vite/Web
+/web/node_modules
+/web/dist
