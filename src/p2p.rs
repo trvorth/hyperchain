@@ -149,7 +149,7 @@ impl NetworkMessage {
     }
 
     fn get_hmac_secret() -> String {
-        dotenv::dotenv().ok();
+        dotenvy::dotenv().ok();
         env::var("HMAC_SECRET").unwrap_or_else(|_| "hyperledger_secret_key_for_p2p".to_string())
     }
 

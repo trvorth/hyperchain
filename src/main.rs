@@ -1,3 +1,4 @@
+use dotenvy::dotenv;
 use anyhow::{Context, Result};
 use chrono::Local;
 use clap::Parser;
@@ -17,6 +18,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    dotenv().ok(); 
     let args = Args::parse();
     let log_prefix: String = args.node_log_prefix.map_or_else(String::new, |p| format!("[{}] ", p));
     let log_prefix_for_format = log_prefix.clone();
