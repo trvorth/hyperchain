@@ -8,9 +8,10 @@ license = "MIT"
 
 [dependencies]
 # Core blockchain and networking
+# NOTE: The 'noise' feature requires openssl
 libp2p = { version = "0.55.0", features = ["tcp", "tokio", "noise", "gossipsub", "yamux", "mdns", "macros", "identify", "ping", "kad"] }
 futures = "0.3.31"
-tokio = { version = "1.45.0", features = ["full", "test-util"] }
+tokio = { version = "1.45.0", features = ["full", "test-util","rt-multi-thread", "time"] }
 axum = { version = "0.7.9", features = ["macros"] }
 axum-server = { version = "0.7.2", features = ["tls-rustls-no-provider"] }
 reqwest = { version = "0.12.8", features = ["json"] }
@@ -24,12 +25,12 @@ hmac = "0.12.1"
 hex = "0.4.3"
 rand = "0.8.5"
 aes-gcm = "0.10.3"
-rustls = "0.23.12"
-rustls-pemfile = "2.2.0"
 argon2 = "0.5.3"
 bip39 = "2.1.0"
 zeroize = "1.8.1"
 subtle = "2.6.1"
+# THIS IS THE KEY FIX: The "vendored" feature tells openssl to build itself
+openssl = { version = "0.10.73", features = ["vendored"] }
 
 # Serialization and configuration
 serde = { version = "1.0.219", features = ["derive"] }
@@ -115,6 +116,10 @@ name = "keygen"
 path = "src/keygen.rs"
 
 [[bin]]
+name = "monitor"
+path = "src/bin/monitor.rs"
+
+[[bin]]
 name = "hyperdag_node1"
 path = "node1/main.rs"
 
@@ -125,3 +130,6 @@ path = "node2/main.rs"
 [[bin]]
 name = "hyperdag_node3"
 path = "node3/main.rs"
+
+
+

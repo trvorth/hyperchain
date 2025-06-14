@@ -1,49 +1,83 @@
 #!/bin/bash
 
-# Exit immediately if a command fails
+# This script uses a robust tarball method to deploy.
+# It creates a compressed archive, uploads it, and extracts it on the server.
+
 set -e
 
 # --- Configuration ---
-# PLEASE EDIT THESE VALUES WITH YOUR SERVER DETAILS
+SERVER_USER="hyperuser"
+SSH_PRIVATE_KEY="/Users/trevor/.ssh/google_compute_engine"
 
-SERVER_USER="admin" # Your username on the cloud servers (e.g., ubuntu, ec2-user)
+# Ensure these IPs are correct from `gcloud compute instances list`
+SERVER_IP_1="34.126.103.74"
+SERVER_IP_2="104.197.0.155"
+SERVER_IP_3="35.195.207.69"
 
-# Replace with your actual server IP addresses
-SERVER_IP_1="192.168.1.3"
-SERVER_IP_2="198.51.100.22"
-SERVER_IP_3="203.0.113.11"
-
-# --- Local File Paths (should not need changing) ---
+# --- File Paths ---
 PROJECT_DIR="/home/${SERVER_USER}/hyperchain"
-LOCAL_BINARY_PATH="./target/release/hyperdag"
-LOCAL_CONFIG_PATH="./config.toml"
+LOCAL_ARCHIVE="hyperchain_payload.tar.gz"
+PAYLOAD_DIR="./payload"
 
 # --- Deployment ---
 
-echo "🚀 Starting HyperChain Devnet Deployment..."
+# Step 1: Build the Linux Binary
+echo "---"
+echo "STEP 1 of 3: Building the Linux binary..."
+echo "---"
+DOCKER_DEFAULT_PLATFORM=linux/amd64 cross build --release --target=x86_64-unknown-linux-gnu
+echo "✅ Build complete."
+echo ""
 
-# Deploy to Node 1
-echo "Deploying to Node 1 (${SERVER_IP_1})..."
-ssh ${SERVER_USER}@${SERVER_IP_1} "mkdir -p ${PROJECT_DIR}"
-scp ${LOCAL_BINARY_PATH} ${SERVER_USER}@${SERVER_IP_1}:${PROJECT_DIR}/
-scp ${LOCAL_CONFIG_PATH} ${SERVER_USER}@${SERVER_IP_1}:${PROJECT_DIR}/
-ssh ${SERVER_USER}@${SERVER_IP_1} "cd ${PROJECT_DIR} && tmux new -s hyperdag-node -d && tmux send-keys -t hyperdag-node 'nohup ./hyperdag --config-path config.toml &' C-m"
-echo "✅ Node 1 Deployed."
+# Step 2: Create a compressed archive of all necessary files
+echo "---"
+echo "STEP 2 of 3: Creating deployment archive..."
+echo "---"
+rm -rf ${PAYLOAD_DIR} ${LOCAL_ARCHIVE} # Clean up old files before creating new ones
+mkdir -p ${PAYLOAD_DIR}
+cp ./target/x86_64-unknown-linux-gnu/release/hyperdag ${PAYLOAD_DIR}/
+cp ./config.toml ${PAYLOAD_DIR}/
+cp ./wallet.key ${PAYLOAD_DIR}/
+tar -czf ${LOCAL_ARCHIVE} -C ${PAYLOAD_DIR} .
+rm -r ${PAYLOAD_DIR}
+echo "✅ Archive '${LOCAL_ARCHIVE}' created."
+echo ""
 
-# Deploy to Node 2
-echo "Deploying to Node 2 (${SERVER_IP_2})..."
-ssh ${SERVER_USER}@${SERVER_IP_2} "mkdir -p ${PROJECT_DIR}"
-scp ${LOCAL_BINARY_PATH} ${SERVER_USER}@${SERVER_IP_2}:${PROJECT_DIR}/
-scp ${LOCAL_CONFIG_PATH} ${SERVER_USER}@${SERVER_IP_2}:${PROJECT_DIR}/
-ssh ${SERVER_USER}@${SERVER_IP_2} "cd ${PROJECT_DIR} && tmux new -s hyperdag-node -d && tmux send-keys -t hyperdag-node 'nohup ./hyperdag --config-path config.toml &' C-m"
-echo "✅ Node 2 Deployed."
+# Step 3: Deploy to all nodes
+echo "---"
+echo "STEP 3 of 3: Deploying archive to all 3 nodes..."
+echo "---"
 
-# Deploy to Node 3
-echo "Deploying to Node 3 (${SERVER_IP_3})..."
-ssh ${SERVER_USER}@${SERVER_IP_3} "mkdir -p ${PROJECT_DIR}"
-scp ${LOCAL_BINARY_PATH} ${SERVER_USER}@${SERVER_IP_3}:${PROJECT_DIR}/
-scp ${LOCAL_CONFIG_PATH} ${SERVER_USER}@${SERVER_IP_3}:${PROJECT_DIR}/
-ssh ${SERVER_USER}@${SERVER_IP_3} "cd ${PROJECT_DIR} && tmux new -s hyperdag-node -d && tmux send-keys -t hyperdag-node 'nohup ./hyperdag --config-path config.toml &' C-m"
-echo "✅ Node 3 Deployed."
+deploy_node() {
+    local node_ip=$1
+    local node_name=$2
+    echo ""
+    echo "--- Deploying to ${node_name} (${node_ip}) ---"
+    
+    echo "--> Uploading archive..."
+    scp -i ${SSH_PRIVATE_KEY} ./${LOCAL_ARCHIVE} ${SERVER_USER}@${node_ip}:/tmp/
+    
+    echo "--> Extracting archive and starting node on server..."
+    ssh -i ${SSH_PRIVATE_KEY} ${SERVER_USER}@${node_ip} "
+        mkdir -p ${PROJECT_DIR} && \
+        tar -xzf /tmp/${LOCAL_ARCHIVE} -C ${PROJECT_DIR} && \
+        rm /tmp/${LOCAL_ARCHIVE} && \
+        cd ${PROJECT_DIR} && \
+        tmux start-server && \
+        (tmux kill-session -t hyperdag-node || true) && \
+        tmux new -s hyperdag-node -d && \
+        tmux send-keys -t hyperdag-node 'nohup ./hyperdag --config-path config.toml &' C-m
+    "
+    echo "✅ Node ${node_name} Deployed."
+}
 
+deploy_node ${SERVER_IP_1} "Node 1 (Asia)"
+deploy_node ${SERVER_IP_2} "Node 2 (US)"
+deploy_node ${SERVER_IP_3} "Node 3 (EU)"
+
+# Clean up the local archive file
+rm ${LOCAL_ARCHIVE}
+
+echo ""
 echo "🎉 All nodes deployed successfully!"
+
