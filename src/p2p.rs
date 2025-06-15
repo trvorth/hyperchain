@@ -42,6 +42,7 @@ const MAX_PROPOSALS: usize = 20_000;
 const HEARTBEAT_INTERVAL_P2P: u64 = 10_000;
 const MDNS_INTERVAL_SECS: u64 = 60;
 const MIN_PEERS_FOR_MESH: usize = 1;
+const DEFAULT_HMAC_SECRET: &str = "hyperledger_secret_key_for_p2p";
 
 lazy_static::lazy_static! {
     static ref MESSAGES_SENT: IntCounter = register_int_counter!("p2p_messages_sent_total", "Total messages sent").unwrap();
@@ -150,7 +151,11 @@ impl NetworkMessage {
 
     fn get_hmac_secret() -> String {
         dotenvy::dotenv().ok();
-        env::var("HMAC_SECRET").unwrap_or_else(|_| "hyperledger_secret_key_for_p2p".to_string())
+        let secret = env::var("HMAC_SECRET").unwrap_or_else(|_| DEFAULT_HMAC_SECRET.to_string());
+        if secret == DEFAULT_HMAC_SECRET {
+            warn!("SECURITY: Using default HMAC secret. This is not secure for production. Please set the HMAC_SECRET environment variable.");
+        }
+        secret
     }
 
     fn compute_hmac(data: &[u8], secret: &str) -> Result<Vec<u8>, P2PError> {
@@ -399,6 +404,8 @@ impl P2PServer {
             SwarmEvent::Behaviour(behaviour_event) => match behaviour_event {
                 NodeBehaviourEvent::Gossipsub(gossipsub::Event::Message { propagation_source, message_id, message }) => {
                     debug!("GossipSub: Received message (ID: {}) from peer: {}", message_id, propagation_source);
+                    
+                    // Clone Arcs to move into the spawned task
                     let dag_clone = self.dag.clone();
                     let mempool_clone = self.mempool.clone();
                     let utxos_clone = self.utxos.clone();
@@ -408,7 +415,7 @@ impl P2PServer {
                     let rl_tx_clone = self.rate_limiter_tx.clone();
                     let rl_state_clone = self.rate_limiter_state.clone();
                     let pk_material_clone = self.node_lattice_signing_key_bytes.clone();
-
+                                        
                     tokio::spawn(async move {
                         P2PServer::static_process_gossip_message(
                             message, propagation_source, blacklist_clone,

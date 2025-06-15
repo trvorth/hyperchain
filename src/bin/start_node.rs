@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Context;
 use clap::Parser;
 use hyperdag::{config::Config, node::Node, wallet::HyperWallet};
 use log::{error, info, warn};
