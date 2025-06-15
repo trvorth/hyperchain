@@ -19,7 +19,7 @@
 
 # Wallet and Key Files (CRITICAL - DO NOT COMMIT)
 *.key
-*.txt # Be careful with this, only if you're sure all .txt files should be ignored
+*.txt 
 keypair.txt
 node1/node1_wallet.key
 node1/private_key.txt
