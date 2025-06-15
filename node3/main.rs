@@ -35,7 +35,7 @@ async fn main() -> Result<()> {
 
     // --- Config Loading ---
     let mut config = Config::load(config_path.to_str().unwrap())
-        .context(format!("{} Failed to load config from {:?}", log_prefix, config_path))?;
+        .context(format!("{log_prefix} Failed to load config from {config_path:?}"))?;
 
     // --- Logger Initialization ---
     let log_directives = format!(
@@ -48,7 +48,7 @@ async fn main() -> Result<()> {
         .try_init()
         .ok();
 
-    info!("{} Starting HyperDAG Node...", log_prefix);
+    info!("{log_prefix} Starting HyperDAG Node...");
     
     // --- UPGRADE: Load cached peers ---
     let cached_peers: Vec<String> = fs::read_to_string(peer_cache_path)
@@ -72,7 +72,7 @@ async fn main() -> Result<()> {
     let validator_wallet = match HyperWallet::from_file(wallet_path, None) {
         Ok(wallet) => wallet,
         Err(_) => {
-            warn!("{} Wallet not found at {}. Ensure it has been copied from the root wallet.key.", log_prefix, wallet_path);
+            warn!("{log_prefix} Wallet not found at {wallet_path}. Ensure it has been copied from the root wallet.key.");
             return Err(anyhow::anyhow!("Wallet file not found at {}", wallet_path));
         }
     };
@@ -91,15 +91,15 @@ async fn main() -> Result<()> {
     // --- Start and Shutdown Logic ---
     let node_handle = tokio::spawn(async move {
         if let Err(e) = node_instance.start().await {
-            error!("[Node 3] Node task failed: {}", e);
+            error!("[Node 3] Node task failed: {e}");
         }
     });
 
-    info!("{} Node started. Waiting for Ctrl+C.", log_prefix);
+    info!("{log_prefix} Node started. Waiting for Ctrl+C.");
     signal::ctrl_c().await?;
-    info!("{} Shutting down.", log_prefix);
+    info!("{log_prefix} Shutting down.");
     node_handle.abort();
     let _ = node_handle.await;
-    info!("{} Shutdown complete.", log_prefix);
+    info!("{log_prefix} Shutdown complete.");
     Ok(())
 }

@@ -120,7 +120,7 @@ impl LatticeSignature {
         for (i, byte) in hash.iter().enumerate() {
             expected_signature[i % 64] ^= *byte;
         }
-        signature_to_verify == &expected_signature
+        signature_to_verify == expected_signature
     }
 }
 
@@ -141,7 +141,7 @@ impl HomomorphicEncrypted {
 
     #[instrument]
     pub fn decrypt(&self, _private_key_material: &[u8]) -> Result<u64, HyperDAGError> {
-        if self.encrypted_amount == hex::encode(Keccak256::digest(&0u64.to_be_bytes())) {
+        if self.encrypted_amount == hex::encode(Keccak256::digest(0u64.to_be_bytes())) {
             Ok(0)
         } else {
             Err(HyperDAGError::HomomorphicError("Placeholder decryption cannot recover original value.".to_string()))
@@ -193,12 +193,12 @@ impl SmartContract {
     pub fn execute(&mut self, input: &str) -> Result<String, HyperDAGError> {
         if self.code.contains("echo") {
             self.storage.insert("last_input".to_string(), input.to_string());
-            Ok(format!("echo: {}", input))
+            Ok(format!("echo: {input}"))
         } else if self.code.contains("increment_counter") {
             let counter = self.storage.entry("counter".to_string()).or_insert_with(|| "0".to_string());
             let current_val: u64 = counter.parse().unwrap_or(0);
             *counter = (current_val + 1).to_string();
-            Ok(format!("counter updated to: {}", counter))
+            Ok(format!("counter updated to: {counter}"))
         }
         else {
             Err(HyperDAGError::SmartContractError("Unsupported contract code or execution logic".to_string()))
@@ -312,7 +312,7 @@ impl HyperBlock {
     #[instrument]
     pub fn compute_merkle_root(transactions: &[Transaction]) -> Result<String, HyperDAGError> {
         if transactions.is_empty() {
-            return Ok(hex::encode(Keccak256::digest(&[])));
+            return Ok(hex::encode(Keccak256::digest([])));
         }
         let mut leaves: Vec<Vec<u8>> = transactions
             .par_iter()
@@ -320,7 +320,7 @@ impl HyperBlock {
             .collect();
         
         if leaves.is_empty() {
-             return Ok(hex::encode(Keccak256::digest(&[])));
+             return Ok(hex::encode(Keccak256::digest([])));
         }
 
         while leaves.len() > 1 {
@@ -471,7 +471,7 @@ impl HyperDAG {
         timelock_duration: u64,
     ) -> Result<String, HyperDAGError> {
         let now = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_| HyperDAGError::TimeError)?.as_secs();
-        let swap_id = hex::encode(Keccak256::digest(format!("swap_{}_{}_{}_{}", initiator, responder, amount, now).as_bytes()));
+        let swap_id = hex::encode(Keccak256::digest(format!("swap_{initiator}_{responder}_{amount}_{now}").as_bytes()));
         let swap = CrossChainSwap {
             swap_id: swap_id.clone(), source_chain, target_chain, source_block_id,
             target_block_id: String::new(), amount, initiator, responder,
@@ -485,7 +485,7 @@ impl HyperDAG {
     pub async fn accept_cross_chain_swap(&self, swap_id: String, target_block_id: String) -> Result<(), HyperDAGError> { // Changed to take &self
         let mut swaps_guard = self.cross_chain_swaps.write().await;
         let swap = swaps_guard.get_mut(&swap_id)
-            .ok_or_else(|| HyperDAGError::CrossChainSwapError(format!("Swap ID {} not found", swap_id)))?;
+            .ok_or_else(|| HyperDAGError::CrossChainSwapError(format!("Swap ID {swap_id} not found")))?;
         if swap.state != SwapState::Initiated {
             return Err(HyperDAGError::CrossChainSwapError(format!("Swap {} is not in Initiated state, current state: {:?}", swap_id, swap.state)));
         }
@@ -517,7 +517,7 @@ impl HyperDAG {
             let mut timestamps_guard = self.block_creation_timestamps.write().await;
             let recent_blocks = timestamps_guard.values().filter(|&&t| now.saturating_sub(t) < 60).count() as u64;
             if recent_blocks >= MAX_BLOCKS_PER_MINUTE {
-                return Err(HyperDAGError::InvalidBlock(format!("Rate limit exceeded: {} blocks in last minute", recent_blocks)));
+                return Err(HyperDAGError::InvalidBlock(format!("Rate limit exceeded: {recent_blocks} blocks in last minute")));
             }
             if timestamps_guard.len() > 1000 {
                 timestamps_guard.retain(|_, t_val| now.saturating_sub(*t_val) < 3600);
@@ -527,9 +527,9 @@ impl HyperDAG {
         {
             let validators_guard = self.validators.read().await;
             let stake = validators_guard.get(validator_address)
-                .ok_or_else(|| HyperDAGError::InvalidBlock(format!("Validator {} not found or no stake", validator_address)))?;
+                .ok_or_else(|| HyperDAGError::InvalidBlock(format!("Validator {validator_address} not found or no stake")))?;
             if *stake < MIN_VALIDATOR_STAKE {
-                return Err(HyperDAGError::InvalidBlock(format!("Insufficient stake for validator {}: {} < {}", validator_address, stake, MIN_VALIDATOR_STAKE)));
+                return Err(HyperDAGError::InvalidBlock(format!("Insufficient stake for validator {validator_address}: {stake} < {MIN_VALIDATOR_STAKE}")));
             }
         }
 
@@ -562,7 +562,7 @@ impl HyperDAG {
             },
         ];
         let reward_tx = Transaction {
-            id: hex::encode(Keccak256::digest(format!("coinbase_{}_{}", now, chain_id_val).as_bytes())),
+            id: hex::encode(Keccak256::digest(format!("coinbase_{now}_{chain_id_val}").as_bytes())),
             sender: validator_address.to_string(), 
             receiver: validator_address.to_string(),
             amount: reward, fee: 0, inputs: vec![], outputs: reward_outputs,
@@ -660,7 +660,7 @@ impl HyperDAG {
         let hash_value_str = &block_pow_hash[..std::cmp::min(16, block_pow_hash.len())]; 
         let hash_value = u64::from_str_radix(hash_value_str, 16).unwrap_or(u64::MAX);
         if hash_value > target {
-            return Err(HyperDAGError::InvalidBlock(format!("Difficulty not met. Hash value {} > target {}", hash_value, target)));
+            return Err(HyperDAGError::InvalidBlock(format!("Difficulty not met. Hash value {hash_value} > target {target}")));
         }
 
         { 
@@ -669,7 +669,7 @@ impl HyperDAG {
                 // let mut _validator_count_on_parents = 0; // Unused
                 for parent_id_val in &block.parents {
                     let parent_block = blocks_guard.get(parent_id_val)
-                        .ok_or_else(|| HyperDAGError::InvalidParent(format!("Parent block {} not found", parent_id_val)))?;
+                        .ok_or_else(|| HyperDAGError::InvalidParent(format!("Parent block {parent_id_val} not found")))?;
                     if parent_block.chain_id != block.chain_id {
                         return Err(HyperDAGError::InvalidParent(format!("Parent {} on chain {} but block {} on chain {}", parent_id_val, parent_block.chain_id, block.id, block.chain_id)));
                     }
@@ -679,7 +679,7 @@ impl HyperDAG {
 
             for (ref_chain_id_val, ref_block_id_val) in &block.cross_chain_references {
                 let ref_block = blocks_guard.get(ref_block_id_val)
-                    .ok_or_else(|| HyperDAGError::CrossChainReferenceError(format!("Reference block {} not found", ref_block_id_val)))?;
+                    .ok_or_else(|| HyperDAGError::CrossChainReferenceError(format!("Reference block {ref_block_id_val} not found")))?;
                 if ref_block.chain_id != *ref_chain_id_val {
                     return Err(HyperDAGError::CrossChainReferenceError(format!("Reference block {} on chain {} but expected chain {}", ref_block_id_val, ref_block.chain_id, ref_chain_id_val)));
                 }
@@ -746,7 +746,7 @@ impl HyperDAG {
             let dev_fee_expected = (expected_reward as f64 * DEV_FEE_RATE) as u64;
             let total_output_amount: u64 = tx.outputs.iter().map(|o_val| o_val.amount).sum();
             
-            tx.outputs.len() >= 1 && // Coinbase txs usually have 1 or 2 outputs (miner + dev)
+            !tx.outputs.is_empty() && // Coinbase txs usually have 1 or 2 outputs (miner + dev)
             tx.outputs.iter().any(|o_val| o_val.address == DEV_ADDRESS && o_val.amount == dev_fee_expected) &&
             total_output_amount == expected_reward &&
             tx.fee == 0 // Coinbase transactions typically have no fee field or it's zero.
@@ -834,7 +834,7 @@ impl HyperDAG {
                             amount: output_val.amount,
                             tx_id: tx_val.id.clone(),
                             output_index: index as u32,
-                            explorer_link: format!("https://hyperblockexplorer.org/utxo/{}", utxo_id),
+                            explorer_link: format!("https://hyperblockexplorer.org/utxo/{utxo_id}"),
                         },
                     );
                 }
@@ -954,13 +954,13 @@ impl HyperDAG {
                     // Check if the end of the traced path (oldest unfinalized block in path) is itself finalizable
                     let last_block_in_path_id = path_to_finalize.last().cloned().unwrap_or_else(|| tip_id_val.clone());
                     let last_block_is_finalizable = blocks_guard.get(&last_block_in_path_id)
-                        .map_or(false, |b| (now.saturating_sub(b.timestamp) > 86400) || b.parents.is_empty());
+                        .is_some_and(|b| (now.saturating_sub(b.timestamp) > 86400) || b.parents.is_empty());
 
 
                     if depth >= FINALIZATION_DEPTH || last_block_is_finalizable {
                         for id_to_finalize in path_to_finalize {
                             if finalized_guard.insert(id_to_finalize.clone()) {
-                                log::debug!("Finalized block: {}", id_to_finalize);
+                                log::debug!("Finalized block: {id_to_finalize}");
                             }
                         }
                     }
@@ -1031,9 +1031,9 @@ impl HyperDAG {
 
                 blocks_write_guard.insert(new_genesis_id.clone(), genesis_block_new_shard);
                 tips_guard.get_mut(&new_chain_id_val).unwrap().insert(new_genesis_id); // unwrap is safe as we just inserted the key
-                info!("Created new shard {} with initial load {}", new_chain_id_val, load_val);
+                info!("Created new shard {new_chain_id_val} with initial load {load_val}");
             }
-            info!("Total new shards created: {}. Total chains now: {}", new_shards_created_count, num_chains_current_val);
+            info!("Total new shards created: {new_shards_created_count}. Total chains now: {num_chains_current_val}");
         }
         Ok(())
     }
@@ -1160,7 +1160,7 @@ impl HyperDAG {
                             crate::transaction::UTXO {
                                 address: output_val.address.clone(), amount: output_val.amount,
                                 tx_id: tx_val.id.clone(), output_index: index_val as u32,
-                                explorer_link: format!("https://hyperblockexplorer.org/utxo/{}", utxo_id_val),
+                                explorer_link: format!("https://hyperblockexplorer.org/utxo/{utxo_id_val}"),
                             },
                         );
                     }

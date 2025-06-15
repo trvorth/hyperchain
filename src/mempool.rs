@@ -135,7 +135,7 @@ impl Mempool {
             MEMPOOL_SIZE.set(*current_size_bytes_guard as f64);
             MEMPOOL_TRANSACTIONS.set(transactions_guard.len() as f64);
             TRANSACTIONS_EXPIRED.inc_by(expired_count as u64);
-            info!("Pruned {} expired transactions, {} bytes removed.", expired_count, bytes_removed);
+            info!("Pruned {expired_count} expired transactions, {bytes_removed} bytes removed.");
         }
     }
 

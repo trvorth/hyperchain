@@ -91,6 +91,12 @@ impl Default for P2pConfig {
     }
 }
 
+impl Default for Config {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Config {
     pub fn new() -> Self {
         Config {
@@ -138,7 +144,7 @@ impl Config {
         }
         if let Some(full_addr) = &self.local_full_p2p_address {
             if full_addr.parse::<Multiaddr>().is_err() {
-                 return Err(ConfigError::InvalidAddress(format!("Invalid local_full_p2p_address format: {}", full_addr)));
+                 return Err(ConfigError::InvalidAddress(format!("Invalid local_full_p2p_address format: {full_addr}")));
             }
         }
         if self.api_address.is_empty() {
@@ -149,7 +155,7 @@ impl Config {
         }
         self.p2p_address.parse::<Multiaddr>().map_err(|e| ConfigError::InvalidAddress(format!("Invalid P2P address {}: {}", self.p2p_address, e)))?;
         for peer in &self.peers {
-            peer.parse::<Multiaddr>().map_err(|e| ConfigError::InvalidAddress(format!("Invalid peer address {}: {}", peer, e)))?;
+            peer.parse::<Multiaddr>().map_err(|e| ConfigError::InvalidAddress(format!("Invalid peer address {peer}: {e}")))?;
         }
         if self.genesis_validator.len() != 64 || hex::decode(&self.genesis_validator).is_err() {
              return Err(ConfigError::InvalidValidator("Genesis validator must be a 64-character hex string representing 32 bytes".to_string()));

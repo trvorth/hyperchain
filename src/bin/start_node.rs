@@ -36,7 +36,7 @@ async fn main() -> anyhow::Result<()> {
     // SECURITY: Ensure private key files have restrictive permissions.
     let identity_key_path = "start_node_p2p_identity.key";
     if Path::new(identity_key_path).exists() {
-        warn!("SECURITY: Reusing existing P2P identity key at '{}'. For production, ensure this file is secure and has restricted permissions.", identity_key_path);
+        warn!("SECURITY: Reusing existing P2P identity key at '{identity_key_path}'. For production, ensure this file is secure and has restricted permissions.");
     }
 
     let peer_cache_path = "start_node_peer_cache.json".to_string();
@@ -44,7 +44,7 @@ async fn main() -> anyhow::Result<()> {
 
     let node_handle = tokio::spawn(async move {
         if let Err(e) = node.start().await {
-            error!("Node failed: {}", e);
+            error!("Node failed: {e}");
         }
     });
 

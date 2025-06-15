@@ -96,7 +96,7 @@ impl Emission {
 
         if elapsed_periods > self.last_halving_period { // Check against persisted last_halving_period
             HALVING_EVENTS.inc();
-            debug!("Halving event: period {}, current reward per chain: {}", elapsed_periods, per_chain_reward);
+            debug!("Halving event: period {elapsed_periods}, current reward per chain: {per_chain_reward}");
             // Note: self.last_halving_period should be updated by the caller (e.g., Miner or HyperDAG)
             // after a block containing this reward is confirmed, or via update_last_halving_period method.
         }

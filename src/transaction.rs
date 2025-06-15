@@ -222,7 +222,7 @@ impl Transaction {
         for input_val in &self.inputs {
             let utxo_id = format!("{}_{}", input_val.tx_id, input_val.output_index);
             let utxo_entry = utxos_read_guard.get(&utxo_id)
-                .ok_or_else(|| TransactionError::InvalidStructure(format!("UTXO {} not found for input", utxo_id)))?;
+                .ok_or_else(|| TransactionError::InvalidStructure(format!("UTXO {utxo_id} not found for input")))?;
             if utxo_entry.address != self.sender {
                 return Err(TransactionError::InvalidStructure(format!("Input UTXO {} does not belong to sender {}", utxo_id, self.sender)));
             }
@@ -237,16 +237,15 @@ impl Transaction {
             if self.fee != 0 { return Err(TransactionError::InvalidStructure("Coinbase transaction fee must be 0".to_string())); }
             if calculated_sum_of_outputs != expected_reward {
                 return Err(TransactionError::InvalidStructure(
-                    format!("Invalid coinbase transaction output sum: expected {}, got {}", expected_reward, calculated_sum_of_outputs),
+                    format!("Invalid coinbase transaction output sum: expected {expected_reward}, got {calculated_sum_of_outputs}"),
                 ));
             }
         } else { // Regular transaction
             let dev_fee_on_transfer_amount = (self.amount as f64 * DEV_FEE_RATE).round() as u64;
-            if dev_fee_on_transfer_amount > 0 {
-                if !self.outputs.iter().any(|o| o.address == DEV_ADDRESS && o.amount == dev_fee_on_transfer_amount) {
+            if dev_fee_on_transfer_amount > 0
+                && !self.outputs.iter().any(|o| o.address == DEV_ADDRESS && o.amount == dev_fee_on_transfer_amount) {
                     return Err(TransactionError::MissingDevFee);
                 }
-            }
             if total_input_value < calculated_sum_of_outputs + self.fee {
                 return Err(TransactionError::InsufficientFunds);
             }
@@ -263,7 +262,7 @@ impl Transaction {
             amount: output.amount,
             tx_id: self.id.clone(),
             output_index: index,
-            explorer_link: format!("https://hyperblockexplorer.org/utxo/{}", utxo_id),
+            explorer_link: format!("https://hyperblockexplorer.org/utxo/{utxo_id}"),
         }
     }
 
@@ -288,7 +287,7 @@ impl Transaction {
         let mut utxos_writer_guard = utxos.write().await;
         for input_val in &self.inputs {
             let utxo_id = format!("{}_{}", input_val.tx_id, input_val.output_index);
-            utxos_writer_guard.remove(&utxo_id).ok_or_else(|| TransactionError::InvalidStructure(format!("UTXO {} not found for removal during apply", utxo_id)))?;
+            utxos_writer_guard.remove(&utxo_id).ok_or_else(|| TransactionError::InvalidStructure(format!("UTXO {utxo_id} not found for removal during apply")))?;
         }
         for (index_val, _output_val) in self.outputs.iter().enumerate() {
             let utxo_to_add = self.generate_utxo(index_val as u32);
