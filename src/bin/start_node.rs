@@ -1,10 +1,10 @@
+use anyhow::{Context, Result};
 use clap::Parser;
 use hyperdag::{config::Config, node::Node, wallet::HyperWallet};
 use log::{error, info, warn};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::signal;
-use anyhow::{Result, Context, bail};
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about = "A generic HyperDAG node starter.")]
@@ -14,12 +14,12 @@ struct Args {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     // Enhancement: Check for config file existence before loading.
     if !Path::new(&args.config_path).exists() {
-        bail!("Configuration file not found at path: {}", &args.config_path);
+        anyhow::bail!("Configuration file not found at path: {}", &args.config_path);
     }
     
     let config = Config::load(&args.config_path)
