@@ -415,7 +415,8 @@ impl P2PServer {
                     let rl_tx_clone = self.rate_limiter_tx.clone();
                     let rl_state_clone = self.rate_limiter_state.clone();
                     let pk_material_clone = self.node_lattice_signing_key_bytes.clone();
-                                        
+                    
+                    // Spawn a separate task to process the message to avoid blocking the event loop
                     tokio::spawn(async move {
                         P2PServer::static_process_gossip_message(
                             message, propagation_source, blacklist_clone,
@@ -570,7 +571,7 @@ impl P2PServer {
                 let dag_guard = dag.read().await;
                 let (blocks, current_utxos) = dag_guard.get_state_snapshot(0).await;
                 drop(dag_guard);
-                warn!("Received StateRequest; static processing cannot send reply with {} blocks and {} UTXOs. Needs P2PServer instance method.", blocks.len(), current_utxos.len());
+                warn!("Received StateRequest; static processing cannot send reply with {} blocks and {} UTXOs. This requires an instance method with access to the swarm to send a reply.", blocks.len(), current_utxos.len());
             }
         }
     }
