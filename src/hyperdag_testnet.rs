@@ -2,7 +2,6 @@ use hyperdag::config::Config;
 use hyperdag::node::Node;
 use hyperdag::wallet::HyperWallet;
 use ed25519_dalek::SigningKey;
-use hex;
 use log::info;
 use rand::rngs::OsRng;
 use std::env;
@@ -60,7 +59,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = fs::remove_file(&temp_peer_cache_path);
 
     if let Err(e) = node_start_result {
-        log::error!("HyperDAG testnet node (from hyperdag_testnet.rs) failed: {}", e);
+        log::error!("HyperDAG testnet node (from hyperdag_testnet.rs) failed: {e}");
         return Err(e.into());
     }
 

@@ -127,23 +127,23 @@ impl Node {
 
         let local_keypair = match fs::read(p2p_identity_path) {
             Ok(key_bytes) => {
-                info!("Loading P2P identity from file: {}", p2p_identity_path);
+                info!("Loading P2P identity from file: {p2p_identity_path}");
                 identity::Keypair::from_protobuf_encoding(&key_bytes)
-                    .map_err(|e| NodeError::P2PIdentity(format!("Failed to decode P2P identity key: {}", e)))
+                    .map_err(|e| NodeError::P2PIdentity(format!("Failed to decode P2P identity key: {e}")))
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                info!("P2P identity key file not found at {}, generating a new one.", p2p_identity_path);
+                info!("P2P identity key file not found at {p2p_identity_path}, generating a new one.");
                 if let Some(p) = Path::new(p2p_identity_path).parent() {
                     fs::create_dir_all(p)?;
                 }
                 let new_key = identity::Keypair::generate_ed25519();
                 fs::write(p2p_identity_path, new_key.to_protobuf_encoding()
-                    .map_err(|e| NodeError::P2PIdentity(format!("Failed to encode P2P key: {:?}", e)))?
+                    .map_err(|e| NodeError::P2PIdentity(format!("Failed to encode P2P key: {e:?}")))?
                 )?;
-                info!("New P2P identity key saved to {}", p2p_identity_path);
+                info!("New P2P identity key saved to {p2p_identity_path}");
                 Ok(new_key)
             }
-            Err(e) => Err(NodeError::P2PIdentity(format!("Failed to read P2P identity key file '{}': {}", p2p_identity_path, e))),
+            Err(e) => Err(NodeError::P2PIdentity(format!("Failed to read P2P identity key file '{p2p_identity_path}': {e}"))),
         }?;
 
         let local_peer_id = PeerId::from(local_keypair.public());
@@ -152,7 +152,7 @@ impl Node {
         let full_local_p2p_address = format!("{}/p2p/{}", config.p2p_address, local_peer_id);
 
         if config.local_full_p2p_address.as_deref() != Some(&full_local_p2p_address) {
-            info!("Updating config file '{}' with local full P2P address: {}", config_path, full_local_p2p_address);
+            info!("Updating config file '{config_path}' with local full P2P address: {full_local_p2p_address}");
             config.local_full_p2p_address = Some(full_local_p2p_address.clone());
             config.save(&config_path)?;
         }
@@ -182,8 +182,8 @@ impl Node {
         {
             let mut utxos_lock = utxos.write().await;
             for chain_id_val in 0..config.num_chains {
-                let genesis_id_convention = format!("genesis_placeholder_tx_id_for_chain_{}", chain_id_val);
-                let utxo_id = format!("genesis_utxo_for_chain_{}", chain_id_val);
+                let genesis_id_convention = format!("genesis_placeholder_tx_id_for_chain_{chain_id_val}");
+                let utxo_id = format!("genesis_utxo_for_chain_{chain_id_val}");
                 utxos_lock.insert(
                     utxo_id.clone(),
                     UTXO {
@@ -191,7 +191,7 @@ impl Node {
                         amount: 100,
                         tx_id: genesis_id_convention,
                         output_index: 0,
-                        explorer_link: format!("https://hyperblockexplorer.org/utxo/{}", utxo_id),
+                        explorer_link: format!("https://hyperblockexplorer.org/utxo/{utxo_id}"),
                     },
                 );
             }
@@ -271,18 +271,18 @@ impl Node {
                     Ok(mut p2p_server) => {
                         if !p2p_initial_peers_config_clone.is_empty() {
                             if let Err(e) = p2p_command_sender_clone.send(P2PCommand::RequestState).await {
-                                 error!("Failed to send initial RequestState P2P command: {}", e);
+                                 error!("Failed to send initial RequestState P2P command: {e}");
                             }
                         }
                         if let Err(e) = p2p_server.run(current_rx).await {
-                            error!("Node's internal P2P server run error: {}. Node will attempt to restart P2P server.", e);
+                            error!("Node's internal P2P server run error: {e}. Node will attempt to restart P2P server.");
                             return Err(NodeError::P2PSpecific(e));
                         }
                         info!("Node's internal P2P server task finished cleanly.");
                         return Ok(());
                     }
                     Err(e) => {
-                        warn!("Node's internal P2P server creation failed: {}. Retrying in 5 seconds...", e);
+                        warn!("Node's internal P2P server creation failed: {e}. Retrying in 5 seconds...");
                         time::sleep(Duration::from_secs(5)).await;
                     }
                 }
@@ -318,22 +318,21 @@ impl Node {
                                     .map(|(_, utxo)| utxo.amount)
                                     .sum::<u64>()
                             };
-                            info!("Wallet balance: address={}, balance={}", wallet_address, balance);
+                            info!("Wallet balance: address={wallet_address}, balance={balance}");
 
                             let proposals_result = time::timeout(Duration::from_secs(2), proposals_clone_miner.write()).await;
                             if let Ok(mut proposals_guard) = proposals_result {
-                                if proposals_guard.len() >= MAX_PROPOSALS {
-                                   if !proposals_guard.is_empty() { proposals_guard.remove(0); }
-                                }
+                                if proposals_guard.len() >= MAX_PROPOSALS
+                                   && !proposals_guard.is_empty() { proposals_guard.remove(0); }
                                 proposals_guard.push(block.clone());
                                 if peers_present {
                                     if let Err(e_send) = mining_tx_channel.try_send(P2PCommand::BroadcastBlock(block)) {
-                                        debug!("Failed to send mined block to P2P channel: {}", e_send);
+                                        debug!("Failed to send mined block to P2P channel: {e_send}");
                                     }
                                 } else {
                                     let mut dag_write_guard = dag_clone_miner.write().await;
                                     if let Err(e) = dag_write_guard.add_block(block, &utxos_clone_miner).await {
-                                        warn!("Failed to add self-mined block in single-node mode: {}", e);
+                                        warn!("Failed to add self-mined block in single-node mode: {e}");
                                     } else {
                                         info!("Added self-mined block to DAG in single-node mode.");
                                     }
@@ -344,7 +343,7 @@ impl Node {
                         }
                         Ok(None) => debug!("No block mined in this round"),
                         Err(e) => {
-                            error!("Mining error: {:?}", e);
+                            error!("Mining error: {e:?}");
                         },
                     }
 
@@ -362,13 +361,13 @@ impl Node {
                                         info!("Added aggregated block {} to DAG", block_to_add.id);
                                         if peers_present {
                                             if let Err(e_send) = mining_tx_channel.try_send(P2PCommand::BroadcastBlock(block_to_add)){
-                                                debug!("Failed to send aggregated block to P2P channel: {}", e_send);
+                                                debug!("Failed to send aggregated block to P2P channel: {e_send}");
                                             }
                                         }
                                     }
                                     proposals_guard.clear();
                                 } else if let Err(e) = aggregated_block_result {
-                                    error!("Error during block aggregation: {:?}", e);
+                                    error!("Error during block aggregation: {e:?}");
                                 }
                             }
                         } else if let Err(_timeout_err) = proposals_result {
@@ -378,7 +377,7 @@ impl Node {
                     }
 
                     if let Err(e) = dag_clone_miner.read().await.adjust_difficulty().await {
-                        error!("Failed to adjust difficulty: {:?}", e);
+                        error!("Failed to adjust difficulty: {e:?}");
                     }
                     time::sleep(Duration::from_millis(500)).await;
                 }
@@ -419,15 +418,15 @@ impl Node {
                 match retry(backoff, || async {
                     let addr: SocketAddr = app_state.api_address.parse().map_err(|e| {
                         BackoffError::Permanent(NodeError::Config(ConfigError::Validation(
-                            format!("Invalid API address: {}", e),
+                            format!("Invalid API address: {e}"),
                         )))
                     })?;
-                    info!("API server starting on {}", addr);
+                    info!("API server starting on {addr}");
                     axum_server::bind(addr)
                         .serve(app.clone().into_make_service())
                         .await
                         .map_err(|e| BackoffError::Transient {
-                            err: NodeError::ServerExecution(format!("API server failed: {}", e)),
+                            err: NodeError::ServerExecution(format!("API server failed: {e}")),
                             retry_after: None,
                         })?;
                     Ok(())
@@ -440,7 +439,7 @@ impl Node {
                     Err(e) => {
                         match e {
                             BackoffError::Permanent(ne) | BackoffError::Transient { err: ne, .. } => {
-                                error!("API server failed permanently after retries: {:?}", ne);
+                                error!("API server failed permanently after retries: {ne:?}");
                                 Err(ne)
                             },
                         }
@@ -468,14 +467,14 @@ impl Node {
                 match res {
                     Ok(task_result_inner) => {
                         if let Err(node_err) = task_result_inner {
-                             error!("A critical node task completed with error: {:?}. Shutting down.", node_err);
+                             error!("A critical node task completed with error: {node_err:?}. Shutting down.");
                              join_set.shutdown().await;
                              return Err(node_err);
                         }
                         info!("A critical node task completed successfully. Shutting down remaining tasks.");
                     }
                     Err(join_err) => {
-                        error!("A critical node task failed (panicked or cancelled): {:?}. Shutting down.", join_err);
+                        error!("A critical node task failed (panicked or cancelled): {join_err:?}. Shutting down.");
                         if !join_err.is_cancelled() {
                             join_set.shutdown().await;
                             return Err(NodeError::Join(join_err));
@@ -573,7 +572,7 @@ async fn publish_readiness_handler(State(state): State<AppState>) -> Result<Json
 
 async fn get_balance(State(state): State<AppState>, AxumPath(address): AxumPath<String>) -> Result<Json<u64>, StatusCode> {
     if !Regex::new(ADDRESS_REGEX).unwrap().is_match(&address) {
-        warn!("Invalid address format for balance check: {}", address);
+        warn!("Invalid address format for balance check: {address}");
         return Err(StatusCode::BAD_REQUEST);
     }
     let utxos_read_guard = state.utxos.read().await;
@@ -587,7 +586,7 @@ async fn get_balance(State(state): State<AppState>, AxumPath(address): AxumPath<
 
 async fn get_utxos(State(state): State<AppState>, AxumPath(address): AxumPath<String>) -> Result<Json<HashMap<String, UTXO>>, StatusCode> {
     if !Regex::new(ADDRESS_REGEX).unwrap().is_match(&address) {
-        warn!("Invalid address format for UTXO fetch: {}", address);
+        warn!("Invalid address format for UTXO fetch: {address}");
         return Err(StatusCode::BAD_REQUEST);
     }
     let utxos_read_guard = state.utxos.read().await;
@@ -622,7 +621,7 @@ async fn submit_transaction(
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    match mempool_write_guard.add_transaction(tx_data.clone(), &*utxos_read_guard, &*dag_read_guard).await {
+    match mempool_write_guard.add_transaction(tx_data.clone(), &utxos_read_guard, &dag_read_guard).await {
         Ok(_) => {
             info!("Transaction {} added to mempool via API", tx_data.id);
             Ok(Json(tx_data.id.clone()))
@@ -636,7 +635,7 @@ async fn submit_transaction(
 
 async fn get_block(State(state): State<AppState>, AxumPath(id_str): AxumPath<String>) -> Result<Json<HyperBlock>, StatusCode> {
     if id_str.len() > 128 || id_str.is_empty() {
-        warn!("Invalid block ID length: {}", id_str);
+        warn!("Invalid block ID length: {id_str}");
         return Err(StatusCode::BAD_REQUEST);
     }
     let dag_read_guard = state.dag.read().await;

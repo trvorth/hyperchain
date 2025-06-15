@@ -6,7 +6,6 @@ use hyperdag::{
 };
 use log::info;
 use rpassword::prompt_password;
-use hex;
 use reqwest::Client;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -124,7 +123,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                  println!("Private Key: {}", hex::encode(sk.to_bytes()));
             }
             if let Some(mnemonic) = wallet.get_mnemonic() {
-                println!("Mnemonic: {}", mnemonic);
+                println!("Mnemonic: {mnemonic}");
             }
             let pass = if args.passphrase { Some(prompt_password("Enter passphrase to encrypt wallet: ")?) } else { None };
             wallet.save_to_file(&args.path, pass.as_deref())?;
@@ -150,7 +149,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let fee: u64 = 1;
 
             let utxos_url = format!("{}/utxos/{}", &args.node, sender_address);
-            info!("Fetching UTXOs from: {}", utxos_url);
+            info!("Fetching UTXOs from: {utxos_url}");
             let available_utxos: HashMap<String, UTXO> = client.get(&utxos_url).send().await?.json().await?;
             info!("Found {} UTXOs for address {}", available_utxos.len(), sender_address);
 
@@ -168,7 +167,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             if total_input_value < total_amount_to_cover {
-                return Err(format!("Insufficient funds. Required: {}, Available: {}", total_amount_to_cover, total_input_value).into());
+                return Err(format!("Insufficient funds. Required: {total_amount_to_cover}, Available: {total_input_value}").into());
             }
 
             let mut outputs_for_tx = vec![Output {
@@ -230,7 +229,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let client = Client::new();
             let balance_url = format!("{}/balance/{}", &args.node, public_key_hex);
-            info!("Fetching balance from: {}", balance_url);
+            info!("Fetching balance from: {balance_url}");
             let balance: u64 = client.get(&balance_url).send().await?.json().await?;
             
             println!("Balance for wallet {}: {} units", &args.path, balance);

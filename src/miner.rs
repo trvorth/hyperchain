@@ -60,11 +60,11 @@ impl Miner {
         let address_regex = Regex::new(r"^[0-9a-fA-F]{64}$")
             .context("Failed to compile address regex for miner")?;
         if !address_regex.is_match(&address) {
-            return Err(MiningError::InvalidAddress(format!("Invalid miner address format: {}", address)).into());
+            return Err(MiningError::InvalidAddress(format!("Invalid miner address format: {address}")).into());
         }
 
         let difficulty = u64::from_str_radix(difficulty_hex.trim_start_matches("0x"), 16)
-            .context(format!("Failed to parse difficulty hex: {}", difficulty_hex))?;
+            .context(format!("Failed to parse difficulty hex: {difficulty_hex}"))?;
 
         let mut effective_use_gpu = use_gpu;
         if use_gpu && !cfg!(feature = "gpu") {
@@ -112,10 +112,10 @@ impl Miner {
         let tips = dag_lock.get_tips(chain_id).await.unwrap_or_default();
 
         if tips.is_empty() && dag_lock.blocks.read().await.is_empty() {
-            warn!("Chain {} has no tips or blocks; genesis block might be required.", chain_id);
+            warn!("Chain {chain_id} has no tips or blocks; genesis block might be required.");
             return Ok(None);
         } else if tips.is_empty() {
-            warn!("No tips for chain {}, skipping mining round.", chain_id);
+            warn!("No tips for chain {chain_id}, skipping mining round.");
             return Ok(None);
         }
 
@@ -124,7 +124,7 @@ impl Miner {
         let transactions = mempool_lock.select_transactions(&dag_lock, &utxos_guard, crate::hyperdag::MAX_TRANSACTIONS_PER_BLOCK).await; // Use constant
 
         if transactions.is_empty() {
-            debug!("No valid transactions to mine for chain {}.", chain_id);
+            debug!("No valid transactions to mine for chain {chain_id}.");
             return Ok(None);
         }
         // The select_transactions should ideally not return more than MAX_TRANSACTIONS_PER_BLOCK
@@ -142,7 +142,7 @@ impl Miner {
             .map_err(|e| MiningError::EmissionError(e.to_string()))?;
 
         let merkle_root = HyperBlock::compute_merkle_root(&transactions)
-            .map_err(|e| MiningError::InvalidBlock(format!("Merkle root computation error: {}", e)))?;
+            .map_err(|e| MiningError::InvalidBlock(format!("Merkle root computation error: {e}")))?;
         
         // Placeholder: In a real scenario, the signing key for LatticeSignature would come from the miner's wallet.
         // HyperBlock::new now takes the signing_key_material.

@@ -20,7 +20,7 @@ struct Args {
 async fn main() -> Result<()> {
     dotenv().ok(); 
     let args = Args::parse();
-    let log_prefix: String = args.node_log_prefix.map_or_else(String::new, |p| format!("[{}] ", p));
+    let log_prefix: String = args.node_log_prefix.map_or_else(String::new, |p| format!("[{p}] "));
     let log_prefix_for_format = log_prefix.clone();
 
     let initial_config = Config::load(&args.config_path)
@@ -43,12 +43,12 @@ async fn main() -> Result<()> {
             )
         })
         .try_init()
-        .context(format!("{}Failed to initialize logger", log_prefix))?;
+        .context(format!("{log_prefix}Failed to initialize logger"))?;
 
     info!("{}Starting HyperDAG node at {:?}", log_prefix, Local::now());
     info!("{}Config loaded from: \"{}\"", log_prefix, args.config_path);
 
-    initial_config.validate().context(format!("{}Config validation failed", log_prefix))?;
+    initial_config.validate().context(format!("{log_prefix}Config validation failed"))?;
 
     let wallet_file_name = "wallet.key";
     let validator_wallet = match HyperWallet::from_file(wallet_file_name, None) {
@@ -57,10 +57,10 @@ async fn main() -> Result<()> {
             wallet
         }
         Err(e) => {
-            warn!("{}Failed to load or parse {}: {}. Generating new wallet.", log_prefix, wallet_file_name, e);
-            let new_wallet = HyperWallet::new().context(format!("{}Failed to generate new wallet", log_prefix))?;
+            warn!("{log_prefix}Failed to load or parse {wallet_file_name}: {e}. Generating new wallet.");
+            let new_wallet = HyperWallet::new().context(format!("{log_prefix}Failed to generate new wallet"))?;
             new_wallet.save_to_file(wallet_file_name, None)
-                .context(format!("{}Failed to save new wallet to {}", log_prefix, wallet_file_name))?;
+                .context(format!("{log_prefix}Failed to save new wallet to {wallet_file_name}"))?;
             info!(
                 "{}Generated new wallet with address: {}. Update config.toml with this genesis_validator if needed.",
                 log_prefix, new_wallet.get_address()
@@ -71,7 +71,7 @@ async fn main() -> Result<()> {
 
     let wallet_arc = Arc::new(validator_wallet);
 
-    info!("{}Initializing and starting Node instance...", log_prefix);
+    info!("{log_prefix}Initializing and starting Node instance...");
 
     let identity_key_path = "p2p_identity.key";
     let peer_cache_path = "peer_cache.json".to_string();
@@ -79,24 +79,24 @@ async fn main() -> Result<()> {
 
     let node_handle = tokio::spawn(async move {
         if let Err(e) = node_instance.start().await {
-            error!("Node main task execution failed: {}", e);
+            error!("Node main task execution failed: {e}");
         } else {
             info!("Node main task completed.");
         }
     });
 
-    info!("{}Node tasks started. Main thread will wait for Ctrl+C.", log_prefix);
+    info!("{log_prefix}Node tasks started. Main thread will wait for Ctrl+C.");
 
     signal::ctrl_c().await?;
-    info!("{}Received Ctrl+C. Shutting down.", log_prefix);
+    info!("{log_prefix}Received Ctrl+C. Shutting down.");
 
     node_handle.abort();
     if let Err(e) = node_handle.await {
         if !e.is_cancelled() {
-            error!("{}Node task join error: {:?}", log_prefix, e);
+            error!("{log_prefix}Node task join error: {e:?}");
         }
     }
 
-    info!("{}Shutdown complete.", log_prefix);
+    info!("{log_prefix}Shutdown complete.");
     Ok(())
 }
