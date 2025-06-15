@@ -1,9 +1,10 @@
 use clap::Parser;
 use hyperdag::{config::Config, node::Node, wallet::HyperWallet};
-use log::{error, info};
+use log::{error, info, warn};
+use std::path::Path;
 use std::sync::Arc;
 use tokio::signal;
-use anyhow::{Result, Context};
+use anyhow::{Result, Context, bail};
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about = "A generic HyperDAG node starter.")]
@@ -16,6 +17,11 @@ struct Args {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
+    // Enhancement: Check for config file existence before loading.
+    if !Path::new(&args.config_path).exists() {
+        bail!("Configuration file not found at path: {}", &args.config_path);
+    }
+    
     let config = Config::load(&args.config_path)
         .context(format!("Failed to load config from {}", &args.config_path))?;
     config.validate()?;
@@ -27,7 +33,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let wallet = HyperWallet::new()?;
     let wallet_arc = Arc::new(wallet);
 
+    // SECURITY: Ensure private key files have restrictive permissions.
     let identity_key_path = "start_node_p2p_identity.key";
+    if Path::new(identity_key_path).exists() {
+        warn!("SECURITY: Reusing existing P2P identity key at '{}'. For production, ensure this file is secure and has restricted permissions.", identity_key_path);
+    }
+
     let peer_cache_path = "start_node_peer_cache.json".to_string();
     let node = Node::new(config, args.config_path.clone(), wallet_arc, identity_key_path, peer_cache_path).await?;
 
