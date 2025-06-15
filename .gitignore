@@ -17,7 +17,7 @@
 # macOS specific files
 .DS_Store
 
-# Wallet and Key Files (CRITICAL - DO NOT COMMIT)
+# Wallet and Key Files 
 *.key
 *.txt 
 keypair.txt
@@ -36,11 +36,11 @@ target/
 # Log files
 *.log
 
-# Certs (example, modify as needed)
+# Certs 
 cert.pem
 key.pem
 
-# Local configuration (example, modify as needed)
+# Local configuration 
 config.local.json
 
 # IDE and editor files
