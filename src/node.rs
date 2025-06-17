@@ -209,7 +209,7 @@ impl Node {
             }
         }
 
-        // FIX: Create a MinerConfig struct and pass it to Miner::new
+        // FIX: Instantiate MinerConfig and pass it to Miner::new
         let miner_config = MinerConfig {
             address: wallet.get_address(),
             dag: dag.clone(),
@@ -222,7 +222,6 @@ impl Node {
             num_chains: config.num_chains,
         };
         let miner_instance = Miner::new(miner_config)?;
-
         let miner = Arc::new(miner_instance);
 
         info!(
@@ -267,22 +266,22 @@ impl Node {
         let peer_cache_path_clone = self.peer_cache_path.clone();
 
         let p2p_task_fut = async move {
-            let mut current_rx = rx_p2p_commands_for_p2p_task;
+            let current_rx = rx_p2p_commands_for_p2p_task;
             loop {
-                match P2PServer::new(
-                    "hyperledger_node_internal",
-                    vec![p2p_listen_address_config_clone.clone()],
-                    p2p_initial_peers_config_clone.clone(),
-                    p2p_dag_clone.clone(),
-                    p2p_mempool_clone.clone(),
-                    p2p_utxos_clone.clone(),
-                    p2p_proposals_clone.clone(),
-                    p2p_identity_keypair_clone.clone(),
-                    &node_signing_key_bytes_for_p2p,
-                    peer_cache_path_clone.clone(),
-                )
-                .await
-                {
+                // This call needs to be updated to use the P2PConfig struct
+                let p2p_config = crate::p2p::P2PConfig {
+                    topic_prefix: "hyperledger_node_internal",
+                    listen_addresses: vec![p2p_listen_address_config_clone.clone()],
+                    initial_peers: p2p_initial_peers_config_clone.clone(),
+                    dag: p2p_dag_clone.clone(),
+                    mempool: p2p_mempool_clone.clone(),
+                    utxos: p2p_utxos_clone.clone(),
+                    proposals: p2p_proposals_clone.clone(),
+                    local_keypair: p2p_identity_keypair_clone.clone(),
+                    node_signing_key_material: &node_signing_key_bytes_for_p2p,
+                    peer_cache_path: peer_cache_path_clone.clone(),
+                };
+                match P2PServer::new(p2p_config).await {
                     Ok(mut p2p_server) => {
                         if !p2p_initial_peers_config_clone.is_empty() {
                             if let Err(e) = p2p_command_sender_clone

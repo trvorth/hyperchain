@@ -178,6 +178,34 @@ pub enum P2PCommand {
 
 type KeyedPeerRateLimiter = RateLimiter<PeerId, DashMapStateStore<PeerId>, DefaultClock>;
 
+// Configuration struct for P2PServer::new
+#[derive(Debug)]
+pub struct P2PConfig<'a> {
+    pub topic_prefix: &'a str,
+    pub listen_addresses: Vec<String>,
+    pub initial_peers: Vec<String>,
+    pub dag: Arc<RwLock<HyperDAG>>,
+    pub mempool: Arc<RwLock<Mempool>>,
+    pub utxos: Arc<RwLock<HashMap<String, UTXO>>>,
+    pub proposals: Arc<RwLock<Vec<HyperBlock>>>,
+    pub local_keypair: identity::Keypair,
+    pub node_signing_key_material: &'a [u8],
+    pub peer_cache_path: String,
+}
+
+// Context struct for processing gossip messages
+pub struct GossipMessageContext {
+    pub blacklist: Arc<RwLock<HashSet<PeerId>>>,
+    pub rate_limiter_block: Arc<KeyedPeerRateLimiter>,
+    pub rate_limiter_tx: Arc<KeyedPeerRateLimiter>,
+    pub rate_limiter_state: Arc<KeyedPeerRateLimiter>,
+    pub local_node_public_lattice_key_bytes: Vec<u8>,
+    pub dag: Arc<RwLock<HyperDAG>>,
+    pub mempool: Arc<RwLock<Mempool>>,
+    pub utxos: Arc<RwLock<HashMap<String, UTXO>>>,
+    pub proposals: Arc<RwLock<Vec<HyperBlock>>>,
+}
+
 pub struct P2PServer {
     swarm: Swarm<NodeBehaviour>,
     dag: Arc<RwLock<HyperDAG>>,
@@ -196,33 +224,15 @@ pub struct P2PServer {
 }
 
 impl P2PServer {
-    #[instrument(skip(
-        dag,
-        mempool,
-        utxos,
-        proposals,
-        local_keypair,
-        node_signing_key_material
-    ))]
-    pub async fn new(
-        topic_prefix: &str,
-        listen_addresses: Vec<String>,
-        initial_peers: Vec<String>,
-        dag: Arc<RwLock<HyperDAG>>,
-        mempool: Arc<RwLock<Mempool>>,
-        utxos: Arc<RwLock<HashMap<String, UTXO>>>,
-        proposals: Arc<RwLock<Vec<HyperBlock>>>,
-        local_keypair: identity::Keypair,
-        node_signing_key_material: &[u8],
-        peer_cache_path: String,
-    ) -> Result<Self, P2PError> {
-        let local_peer_id = PeerId::from(local_keypair.public());
+    #[instrument(skip(config))]
+    pub async fn new(config: P2PConfig<'_>) -> Result<Self, P2PError> {
+        let local_peer_id = PeerId::from(config.local_keypair.public());
         info!("P2PServer using Local P2P Peer ID: {}", local_peer_id);
 
         let store = MemoryStore::new(local_peer_id);
         let mut kademlia_behaviour = KadBehaviour::new(local_peer_id, store);
 
-        for peer_addr_str in &initial_peers {
+        for peer_addr_str in &config.initial_peers {
             if let Ok(multiaddr) = peer_addr_str.parse::<Multiaddr>() {
                 if let Some(peer_id) = multiaddr.iter().find_map(|p| {
                     if let libp2p::multiaddr::Protocol::P2p(id) = p {
@@ -236,7 +246,7 @@ impl P2PServer {
             }
         }
 
-        let gossipsub_behaviour = Self::build_gossipsub_behaviour(local_keypair.clone())?;
+        let gossipsub_behaviour = Self::build_gossipsub_behaviour(config.local_keypair.clone())?;
 
         let mdns_config = libp2p::mdns::Config {
             ttl: Duration::from_secs(MDNS_INTERVAL_SECS * 2),
@@ -252,7 +262,7 @@ impl P2PServer {
             kademlia: kademlia_behaviour,
         };
 
-        let mut swarm = SwarmBuilder::with_existing_identity(local_keypair)
+        let mut swarm = SwarmBuilder::with_existing_identity(config.local_keypair)
             .with_tokio()
             .with_tcp(
                 libp2p::tcp::Config::default().nodelay(true),
@@ -264,17 +274,17 @@ impl P2PServer {
             .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(60)))
             .build();
 
-        if !initial_peers.is_empty() {
+        if !config.initial_peers.is_empty() {
             if let Err(e) = swarm.behaviour_mut().kademlia.bootstrap() {
                 warn!("Failed to start Kademlia bootstrap: {e:?}");
             }
         }
 
-        let topics = Self::subscribe_to_topics(topic_prefix, &mut swarm.behaviour_mut().gossipsub)?;
+        let topics = Self::subscribe_to_topics(config.topic_prefix, &mut swarm.behaviour_mut().gossipsub)?;
 
-        Self::listen_on_addresses(&mut swarm, &listen_addresses, &local_peer_id)?;
-        if !initial_peers.is_empty() {
-            Self::dial_initial_peers(&mut swarm, &initial_peers).await;
+        Self::listen_on_addresses(&mut swarm, &config.listen_addresses, &local_peer_id)?;
+        if !config.initial_peers.is_empty() {
+            Self::dial_initial_peers(&mut swarm, &config.initial_peers).await;
         } else {
             info!("No initial peers configured. Relying on mDNS for local discovery.");
         }
@@ -285,19 +295,19 @@ impl P2PServer {
 
         Ok(Self {
             swarm,
-            dag,
-            mempool,
-            utxos,
-            proposals,
+            dag: config.dag,
+            mempool: config.mempool,
+            utxos: config.utxos,
+            proposals: config.proposals,
             topics,
             rate_limiter_block: Arc::new(RateLimiter::keyed(quota_block)),
             rate_limiter_tx: Arc::new(RateLimiter::keyed(quota_tx)),
             rate_limiter_state: Arc::new(RateLimiter::keyed(quota_state)),
             blacklist: Arc::new(RwLock::new(HashSet::new())),
-            node_lattice_signing_key_bytes: node_signing_key_material.to_vec(),
+            node_lattice_signing_key_bytes: config.node_signing_key_material.to_vec(),
             known_peers: Arc::new(RwLock::new(HashSet::new())),
-            initial_peers_config: initial_peers,
-            peer_cache_path,
+            initial_peers_config: config.initial_peers,
+            peer_cache_path: config.peer_cache_path,
         })
     }
 
@@ -465,31 +475,23 @@ impl P2PServer {
                 }) => {
                     debug!("GossipSub: Received message (ID: {message_id}) from peer: {propagation_source}");
 
-                    // Clone Arcs to move into the spawned task
-                    let dag_clone = self.dag.clone();
-                    let mempool_clone = self.mempool.clone();
-                    let utxos_clone = self.utxos.clone();
-                    let proposals_clone = self.proposals.clone();
-                    let blacklist_clone = self.blacklist.clone();
-                    let rl_block_clone = self.rate_limiter_block.clone();
-                    let rl_tx_clone = self.rate_limiter_tx.clone();
-                    let rl_state_clone = self.rate_limiter_state.clone();
-                    let pk_material_clone = self.node_lattice_signing_key_bytes.clone();
+                    let context = GossipMessageContext {
+                        blacklist: self.blacklist.clone(),
+                        rate_limiter_block: self.rate_limiter_block.clone(),
+                        rate_limiter_tx: self.rate_limiter_tx.clone(),
+                        rate_limiter_state: self.rate_limiter_state.clone(),
+                        local_node_public_lattice_key_bytes: self.node_lattice_signing_key_bytes.clone(),
+                        dag: self.dag.clone(),
+                        mempool: self.mempool.clone(),
+                        utxos: self.utxos.clone(),
+                        proposals: self.proposals.clone(),
+                    };
 
-                    // Spawn a separate task to process the message to avoid blocking the event loop
                     tokio::spawn(async move {
                         P2PServer::static_process_gossip_message(
                             message,
                             propagation_source,
-                            blacklist_clone,
-                            rl_block_clone,
-                            rl_tx_clone,
-                            rl_state_clone,
-                            pk_material_clone,
-                            dag_clone,
-                            mempool_clone,
-                            utxos_clone,
-                            proposals_clone,
+                            context,
                         )
                         .await;
                     });
@@ -582,36 +584,28 @@ impl P2PServer {
     async fn static_process_gossip_message(
         message: gossipsub::Message,
         source: PeerId,
-        blacklist: Arc<RwLock<HashSet<PeerId>>>,
-        rate_limiter_block: Arc<KeyedPeerRateLimiter>,
-        rate_limiter_tx: Arc<KeyedPeerRateLimiter>,
-        rate_limiter_state: Arc<KeyedPeerRateLimiter>,
-        _local_node_public_lattice_key_bytes: Vec<u8>,
-        dag: Arc<RwLock<HyperDAG>>,
-        mempool: Arc<RwLock<Mempool>>,
-        utxos: Arc<RwLock<HashMap<String, UTXO>>>,
-        proposals: Arc<RwLock<Vec<HyperBlock>>>,
+        context: GossipMessageContext,
     ) {
-        if blacklist.read().await.contains(&source) {
+        if context.blacklist.read().await.contains(&source) {
             warn!("Ignoring message from blacklisted peer: {source}");
             return;
         }
 
         let topic_str = message.topic.as_str();
         let (rate_limiter_to_use, message_type_str) = if topic_str.contains("blocks") {
-            (rate_limiter_block, "block")
+            (context.rate_limiter_block, "block")
         } else if topic_str.contains("transactions") {
-            (rate_limiter_tx, "transaction")
+            (context.rate_limiter_tx, "transaction")
         } else if topic_str.contains("state_updates") {
-            (rate_limiter_state, "state_update")
+            (context.rate_limiter_state, "state_update")
         } else {
             warn!("Message on unknown topic '{topic_str}', applying default (block) rate limiter");
-            (rate_limiter_block, "unknown_topic_block")
+            (context.rate_limiter_block, "unknown_topic_block")
         };
 
         if rate_limiter_to_use.check_key(&source).is_err() {
             warn!("Rate limit exceeded for peer {source} on {message_type_str} messages");
-            blacklist.write().await.insert(source);
+            context.blacklist.write().await.insert(source);
             PEERS_BLACKLISTED.inc();
             return;
         }
@@ -649,7 +643,7 @@ impl P2PServer {
             }
             _ => {
                 warn!("HMAC verification failed for message from peer {source}");
-                blacklist.write().await.insert(source);
+                context.blacklist.write().await.insert(source);
                 PEERS_BLACKLISTED.inc();
                 return;
             }
@@ -659,24 +653,24 @@ impl P2PServer {
         info!("Processing verified (HMAC) message data from {source} on topic {topic_str}");
         match msg_payload.data {
             NetworkMessageData::Block(block) => {
-                P2PServer::static_process_block(block, source, dag, utxos, proposals).await
+                P2PServer::static_process_block(block, source, context.dag, context.utxos, context.proposals).await
             }
             NetworkMessageData::Transaction(tx) => {
-                P2PServer::static_process_transaction(tx, source, mempool, dag, utxos).await
+                P2PServer::static_process_transaction(tx, source, context.mempool, context.dag, context.utxos).await
             }
             NetworkMessageData::State(blocks_map, new_utxos_map) => {
                 P2PServer::static_process_state_sync_data(
                     blocks_map,
                     new_utxos_map,
                     source,
-                    dag,
-                    utxos,
+                    context.dag,
+                    context.utxos,
                 )
                 .await
             }
             NetworkMessageData::StateRequest => {
                 info!("Received StateRequest from peer {source}. Preparing to send current state.");
-                let dag_guard = dag.read().await;
+                let dag_guard = context.dag.read().await;
                 let (blocks, current_utxos) = dag_guard.get_state_snapshot(0).await;
                 drop(dag_guard);
                 warn!("Received StateRequest; static processing cannot send reply with {} blocks and {} UTXOs. This requires an instance method with access to the swarm to send a reply.", blocks.len(), current_utxos.len());
