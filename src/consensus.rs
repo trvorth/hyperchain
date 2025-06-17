@@ -54,11 +54,11 @@ impl Consensus {
             return Err(ConsensusError::InvalidBlockSize);
         }
         if block.transactions.len() > self.max_transactions_per_block {
-            return Err(ConsensusError::InvalidBlockStructure); 
+            return Err(ConsensusError::InvalidBlockStructure);
         }
         for tx in &block.transactions {
-            if serde_json::to_vec(&tx) 
-                .map_err(|_| ConsensusError::InvalidTransaction)? 
+            if serde_json::to_vec(&tx)
+                .map_err(|_| ConsensusError::InvalidTransaction)?
                 .len()
                 > self.max_transaction_size
             {
@@ -69,7 +69,11 @@ impl Consensus {
                 return Err(ConsensusError::InvalidTransaction);
             }
         }
-        if !dag.is_valid_block(block, utxos).await.map_err(|_| ConsensusError::InvalidBlockStructure)? {
+        if !dag
+            .is_valid_block(block, utxos)
+            .await
+            .map_err(|_| ConsensusError::InvalidBlockStructure)?
+        {
             return Err(ConsensusError::InvalidBlockStructure);
         }
         Ok(())

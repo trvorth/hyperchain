@@ -1,19 +1,19 @@
+use crate::emission::Emission;
 use crate::hyperdag::{HyperBlock, HyperDAG};
 use crate::mempool::Mempool;
-use crate::emission::Emission;
 use crate::transaction::UTXO;
+use anyhow::{Context as AnyhowContext, Result};
 use log::{debug, info, warn};
+use rand::Rng;
+use rayon::prelude::*;
+use regex::Regex;
 use sha3::{Digest, Keccak256};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 use tokio::sync::RwLock;
-use rayon::prelude::*;
-use regex::Regex;
-use rand::Rng;
 use tracing::instrument;
-use anyhow::{Result, Context as AnyhowContext};
 
 #[derive(Error, Debug)]
 pub enum MiningError {
@@ -60,7 +60,10 @@ impl Miner {
         let address_regex = Regex::new(r"^[0-9a-fA-F]{64}$")
             .context("Failed to compile address regex for miner")?;
         if !address_regex.is_match(&address) {
-            return Err(MiningError::InvalidAddress(format!("Invalid miner address format: {address}")).into());
+            return Err(MiningError::InvalidAddress(format!(
+                "Invalid miner address format: {address}"
+            ))
+            .into());
         }
 
         let difficulty = u64::from_str_radix(difficulty_hex.trim_start_matches("0x"), 16)
@@ -71,7 +74,7 @@ impl Miner {
             warn!("GPU mining enabled in config but 'gpu' feature is not compiled. Disabling GPU for this session.");
             effective_use_gpu = false;
         }
-        
+
         let mut effective_zk_enabled = zk_enabled;
         if zk_enabled && !cfg!(feature = "zk") {
             warn!("ZK proofs enabled in config but 'zk' feature is not compiled. Disabling ZK for this session.");
@@ -121,7 +124,13 @@ impl Miner {
 
         let parents = tips.into_iter().collect::<Vec<String>>();
         let utxos_guard = utxos_arc.read().await;
-        let transactions = mempool_lock.select_transactions(&dag_lock, &utxos_guard, crate::hyperdag::MAX_TRANSACTIONS_PER_BLOCK).await; // Use constant
+        let transactions = mempool_lock
+            .select_transactions(
+                &dag_lock,
+                &utxos_guard,
+                crate::hyperdag::MAX_TRANSACTIONS_PER_BLOCK,
+            )
+            .await; // Use constant
 
         if transactions.is_empty() {
             debug!("No valid transactions to mine for chain {chain_id}.");
@@ -130,20 +139,20 @@ impl Miner {
         // The select_transactions should ideally not return more than MAX_TRANSACTIONS_PER_BLOCK
         // but an explicit check here before creating the block is a good safeguard.
         if transactions.len() > crate::hyperdag::MAX_TRANSACTIONS_PER_BLOCK {
-             warn!("Miner selected {} transactions, exceeding MAX_TRANSACTIONS_PER_BLOCK {}. This should be handled by mempool.select_transactions.", transactions.len(), crate::hyperdag::MAX_TRANSACTIONS_PER_BLOCK);
-             // Depending on policy, either truncate or return error. For now, let's assume select_transactions respects the limit.
+            warn!("Miner selected {} transactions, exceeding MAX_TRANSACTIONS_PER_BLOCK {}. This should be handled by mempool.select_transactions.", transactions.len(), crate::hyperdag::MAX_TRANSACTIONS_PER_BLOCK);
+            // Depending on policy, either truncate or return error. For now, let's assume select_transactions respects the limit.
         }
 
-
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)?
-            .as_secs();
-        let reward = self.emission.calculate_reward(timestamp)
+        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+        let reward = self
+            .emission
+            .calculate_reward(timestamp)
             .map_err(|e| MiningError::EmissionError(e.to_string()))?;
 
-        let merkle_root = HyperBlock::compute_merkle_root(&transactions)
-            .map_err(|e| MiningError::InvalidBlock(format!("Merkle root computation error: {e}")))?;
-        
+        let merkle_root = HyperBlock::compute_merkle_root(&transactions).map_err(|e| {
+            MiningError::InvalidBlock(format!("Merkle root computation error: {e}"))
+        })?;
+
         // Placeholder: In a real scenario, the signing key for LatticeSignature would come from the miner's wallet.
         // HyperBlock::new now takes the signing_key_material.
         // We'll assume for this mining function, the block is constructed first, then signed if PoW is met.
@@ -156,17 +165,17 @@ impl Miner {
             parents,
             transactions, // Transactions are moved here
             self.difficulty,
-            self.address.clone(), // Validator
-            self.address.clone(), // Miner
+            self.address.clone(),     // Validator
+            self.address.clone(),     // Miner
             &signing_key_placeholder, // Placeholder signing material for now
-        ).map_err(MiningError::DAG)?;
-        
+        )
+        .map_err(MiningError::DAG)?;
+
         // HyperBlock::new sets the timestamp and nonce (to 0 initially). Update reward.
         initial_block_candidate.timestamp = timestamp; // Ensure miner's timestamp is used
         initial_block_candidate.reward = reward;
         // Merkle root is already computed by HyperBlock::new if transactions are passed. Re-assign if needed.
         initial_block_candidate.merkle_root = merkle_root;
-
 
         let target_hash_bytes = Miner::calculate_target_from_difficulty(self.difficulty);
         let start_time = SystemTime::now();
@@ -181,13 +190,30 @@ impl Miner {
             warn!("GPU mining selected but not implemented, falling back to CPU.");
             // In a real GPU miner, you would pass data to the GPU and await results.
             // For now, it falls back to CPU.
-            self.mine_cpu(initial_block_candidate, &target_hash_bytes, start_time, timeout_duration).await?
+            self.mine_cpu(
+                initial_block_candidate,
+                &target_hash_bytes,
+                start_time,
+                timeout_duration,
+            )
+            .await?
         } else {
-            self.mine_cpu(initial_block_candidate, &target_hash_bytes, start_time, timeout_duration).await?
+            self.mine_cpu(
+                initial_block_candidate,
+                &target_hash_bytes,
+                start_time,
+                timeout_duration,
+            )
+            .await?
         };
 
         if let Some(ref mined_block) = mining_result {
-            info!("Successfully mined block {} on chain {} with {} transactions.", mined_block.id, mined_block.chain_id, mined_block.transactions.len());
+            info!(
+                "Successfully mined block {} on chain {} with {} transactions.",
+                mined_block.id,
+                mined_block.chain_id,
+                mined_block.transactions.len()
+            );
             // Potentially sign the block now with the definitive nonce using the actual miner's key
             // This depends on whether HyperBlock::new and hash_meets_target handle the final signature or if it's done post-PoW.
         }
@@ -198,11 +224,12 @@ impl Miner {
     #[instrument]
     async fn mine_cpu(
         &self,
-        block_template: HyperBlock, 
+        block_template: HyperBlock,
         target_hash_value: &[u8],
         start_time: SystemTime,
         timeout_duration: Duration,
-    ) -> Result<Option<HyperBlock>> { // Added Result wrapper
+    ) -> Result<Option<HyperBlock>> {
+        // Added Result wrapper
         let thread_pool = rayon::ThreadPoolBuilder::new()
             .num_threads(self.threads)
             .build()
@@ -214,7 +241,8 @@ impl Miner {
 
             (nonce_start..u64::MAX) // Iterate through possible nonces
                 .into_par_iter() // Parallelize the search
-                .find_map_any(|current_nonce| { // Find the first nonce that satisfies the condition
+                .find_map_any(|current_nonce| {
+                    // Find the first nonce that satisfies the condition
                     if let Ok(elapsed) = start_time.elapsed() {
                         if elapsed > timeout_duration {
                             return None; // Timeout
@@ -239,8 +267,12 @@ impl Miner {
                         return Some(candidate_block);
                     }
 
-                    if current_nonce % 1_000_000 == 0 { // Log progress occasionally
-                        debug!("CPU mining on chain {}, current nonce chunk starting near: {}", block_template.chain_id, current_nonce);
+                    if current_nonce % 1_000_000 == 0 {
+                        // Log progress occasionally
+                        debug!(
+                            "CPU mining on chain {}, current nonce chunk starting near: {}",
+                            block_template.chain_id, current_nonce
+                        );
                     }
                     None
                 })
@@ -248,7 +280,7 @@ impl Miner {
 
         Ok(found_block_option)
     }
-    
+
     #[instrument]
     fn calculate_final_block_id(block: &HyperBlock) -> String {
         // The ID should be a hash of the block's consensus-critical components,
@@ -299,7 +331,7 @@ impl Miner {
         // For a fair comparison, we should compare them as large numbers.
         // If target_bytes is shorter, we compare the most significant part of hash_bytes.
         let n_target = target_bytes.len(); // Should be 8
-        
+
         // Ensure hash_bytes has at least n_target bytes for a meaningful comparison.
         // If PoW hash is shorter than target, it can't meet the target (unless target is huge).
         if hash_bytes.len() < n_target {

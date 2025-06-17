@@ -128,7 +128,9 @@ impl HyperWallet {
 
         if let Some(pass) = passphrase {
             if contents.len() < 12 {
-                return Err(WalletError::Encryption("Invalid encrypted data length".to_string()));
+                return Err(WalletError::Encryption(
+                    "Invalid encrypted data length".to_string(),
+                ));
             }
             let nonce = Nonce::from_slice(&contents[..12]);
             let ciphertext = &contents[12..];
@@ -143,7 +145,13 @@ impl HyperWallet {
             let cipher = Aes256Gcm::new_from_slice(&key)
                 .map_err(|e| WalletError::Encryption(e.to_string()))?;
             let plaintext = cipher
-                .decrypt(nonce, Payload { msg: ciphertext, aad: b"" })
+                .decrypt(
+                    nonce,
+                    Payload {
+                        msg: ciphertext,
+                        aad: b"",
+                    },
+                )
                 .map_err(|e| WalletError::Encryption(e.to_string()))?;
             Ok(serde_json::from_slice(&plaintext)?)
         } else {
@@ -166,7 +174,13 @@ impl HyperWallet {
                 .map_err(|e| WalletError::Encryption(e.to_string()))?;
             let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
             let ciphertext = cipher
-                .encrypt(&nonce, Payload { msg: &serialized, aad: b"" })
+                .encrypt(
+                    &nonce,
+                    Payload {
+                        msg: &serialized,
+                        aad: b"",
+                    },
+                )
                 .map_err(|e| WalletError::Encryption(e.to_string()))?;
             let mut file = File::create(path)?;
             file.write_all(&nonce)?;

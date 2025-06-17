@@ -1,12 +1,12 @@
 use clap::{Args, Parser, Subcommand};
 use hyperdag::{
     hyperdag::HomomorphicEncrypted,
-    transaction::{Input, Output, Transaction, UTXO, DEV_ADDRESS, DEV_FEE_RATE},
+    transaction::{Input, Output, Transaction, DEV_ADDRESS, DEV_FEE_RATE, UTXO},
     wallet::HyperWallet,
 };
 use log::info;
-use rpassword::prompt_password;
 use reqwest::Client;
+use rpassword::prompt_password;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -109,7 +109,6 @@ struct BalanceArgs {
     passphrase: bool,
 }
 
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
@@ -120,17 +119,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let wallet = HyperWallet::new()?;
             println!("Public Key (Address): {}", wallet.get_address());
             if let Ok(sk) = wallet.get_signing_key() {
-                 println!("Private Key: {}", hex::encode(sk.to_bytes()));
+                println!("Private Key: {}", hex::encode(sk.to_bytes()));
             }
             if let Some(mnemonic) = wallet.get_mnemonic() {
                 println!("Mnemonic: {mnemonic}");
             }
-            let pass = if args.passphrase { Some(prompt_password("Enter passphrase to encrypt wallet: ")?) } else { None };
+            let pass = if args.passphrase {
+                Some(prompt_password("Enter passphrase to encrypt wallet: ")?)
+            } else {
+                None
+            };
             wallet.save_to_file(&args.path, pass.as_deref())?;
             info!("Generated and saved new wallet to {}", &args.path);
         }
         Commands::Show(args) => {
-            let pass = if args.passphrase { Some(prompt_password("Enter passphrase: ")?) } else { None };
+            let pass = if args.passphrase {
+                Some(prompt_password("Enter passphrase: ")?)
+            } else {
+                None
+            };
             let wallet = HyperWallet::from_file(&args.path, pass.as_deref())?;
             println!("Showing details for wallet: {}", &args.path);
             println!("Public Key (Address): {}", wallet.get_address());
@@ -139,7 +146,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if args.recipient.len() != 64 || hex::decode(&args.recipient).is_err() {
                 return Err("Invalid recipient address".into());
             }
-            let pass = if args.passphrase { Some(prompt_password("Enter passphrase: ")?) } else { None };
+            let pass = if args.passphrase {
+                Some(prompt_password("Enter passphrase: ")?)
+            } else {
+                None
+            };
             let wallet = HyperWallet::from_file(&args.path, pass.as_deref())?;
             let sender_address = wallet.get_address();
             let he_pub_key_material = &wallet.get_public_key()?.to_bytes();
@@ -150,8 +161,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let utxos_url = format!("{}/utxos/{}", &args.node, sender_address);
             info!("Fetching UTXOs from: {utxos_url}");
-            let available_utxos: HashMap<String, UTXO> = client.get(&utxos_url).send().await?.json().await?;
-            info!("Found {} UTXOs for address {}", available_utxos.len(), sender_address);
+            let available_utxos: HashMap<String, UTXO> =
+                client.get(&utxos_url).send().await?.json().await?;
+            info!(
+                "Found {} UTXOs for address {}",
+                available_utxos.len(),
+                sender_address
+            );
 
             let mut inputs_for_tx = vec![];
             let mut total_input_value = 0;
@@ -160,9 +176,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             for (_id, utxo) in available_utxos {
                 if utxo.address == sender_address {
-                    inputs_for_tx.push(Input { tx_id: utxo.tx_id, output_index: utxo.output_index });
+                    inputs_for_tx.push(Input {
+                        tx_id: utxo.tx_id,
+                        output_index: utxo.output_index,
+                    });
                     total_input_value += utxo.amount;
-                    if total_input_value >= total_amount_to_cover { break; }
+                    if total_input_value >= total_amount_to_cover {
+                        break;
+                    }
                 }
             }
 
@@ -180,7 +201,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 outputs_for_tx.push(Output {
                     address: DEV_ADDRESS.to_string(),
                     amount: dev_fee_on_transfer,
-                    homomorphic_encrypted: HomomorphicEncrypted::new(dev_fee_on_transfer, he_pub_key_material),
+                    homomorphic_encrypted: HomomorphicEncrypted::new(
+                        dev_fee_on_transfer,
+                        he_pub_key_material,
+                    ),
                 });
             }
 
@@ -189,14 +213,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 outputs_for_tx.push(Output {
                     address: sender_address.clone(),
                     amount: change_amount,
-                    homomorphic_encrypted: HomomorphicEncrypted::new(change_amount, he_pub_key_material),
+                    homomorphic_encrypted: HomomorphicEncrypted::new(
+                        change_amount,
+                        he_pub_key_material,
+                    ),
                 });
             }
-            
+
             let tx = Transaction::new(
-                sender_address, args.recipient.clone(), args.amount, fee, inputs_for_tx, outputs_for_tx,
-                &signing_key_bytes, Arc::new(RwLock::new(HashMap::new())),
-            ).await?;
+                sender_address,
+                args.recipient.clone(),
+                args.amount,
+                fee,
+                inputs_for_tx,
+                outputs_for_tx,
+                &signing_key_bytes,
+                Arc::new(RwLock::new(HashMap::new())),
+            )
+            .await?;
 
             let api_url = format!("{}/transaction", &args.node);
             let res = client.post(&api_url).json(&tx).send().await?;
@@ -204,13 +238,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if res.status().is_success() {
                 println!("Transaction sent successfully! ID: {}", tx.id);
             } else {
-                return Err(format!("Failed to send transaction: {} - {}", res.status(), res.text().await?).into());
+                return Err(format!(
+                    "Failed to send transaction: {} - {}",
+                    res.status(),
+                    res.text().await?
+                )
+                .into());
             }
         }
         Commands::Import(args) => {
             let wallet = HyperWallet::from_private_key(&args.private_key)?;
             println!("Imported wallet with address: {}", wallet.get_address());
-            let pass = if args.passphrase { Some(prompt_password("Enter passphrase to encrypt wallet: ")?) } else { None };
+            let pass = if args.passphrase {
+                Some(prompt_password("Enter passphrase to encrypt wallet: ")?)
+            } else {
+                None
+            };
             wallet.save_to_file(&args.path, pass.as_deref())?;
             info!("Imported and saved wallet to {}", &args.path);
         }
@@ -218,12 +261,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let wallet = HyperWallet::from_mnemonic(&args.mnemonic)?;
             println!("Imported wallet with address: {}", wallet.get_address());
             println!("Mnemonic: {}", wallet.get_mnemonic().unwrap_or_default());
-            let pass = if args.passphrase { Some(prompt_password("Enter passphrase to encrypt wallet: ")?) } else { None };
+            let pass = if args.passphrase {
+                Some(prompt_password("Enter passphrase to encrypt wallet: ")?)
+            } else {
+                None
+            };
             wallet.save_to_file(&args.path, pass.as_deref())?;
             info!("Imported and saved wallet from mnemonic to {}", &args.path);
         }
         Commands::Balance(args) => {
-            let pass = if args.passphrase { Some(prompt_password("Enter passphrase: ")?) } else { None };
+            let pass = if args.passphrase {
+                Some(prompt_password("Enter passphrase: ")?)
+            } else {
+                None
+            };
             let wallet = HyperWallet::from_file(&args.path, pass.as_deref())?;
             let public_key_hex = wallet.get_address();
 
@@ -231,7 +282,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let balance_url = format!("{}/balance/{}", &args.node, public_key_hex);
             info!("Fetching balance from: {balance_url}");
             let balance: u64 = client.get(&balance_url).send().await?.json().await?;
-            
+
             println!("Balance for wallet {}: {} units", &args.path, balance);
         }
     }

@@ -10,6 +10,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let private_key = &args[1];
     let wallet = HyperWallet::from_private_key(private_key)?;
     wallet.save_to_file("wallet.key", None)?;
-    println!("Wallet imported successfully with address: {}", wallet.get_address());
+    println!(
+        "Wallet imported successfully with address: {}",
+        wallet.get_address()
+    );
     Ok(())
 }

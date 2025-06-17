@@ -1,7 +1,7 @@
+use bip39::{Language, Mnemonic};
 use ed25519_dalek::SigningKey;
 use rand::rngs::OsRng;
 use rand::Rng; // Added this line to bring the 'gen' method into scope
-use bip39::{Language, Mnemonic};
 use std::fs::File;
 use std::io::Write;
 
@@ -17,7 +17,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mnemonic_phrase = mnemonic.to_string();
 
     println!("Private Key: {}", hex::encode(private_key));
-    println!("Public Address (genesis_validator): {}", hex::encode(public_key));
+    println!(
+        "Public Address (genesis_validator): {}",
+        hex::encode(public_key)
+    );
     println!("Mnemonic Phrase: {mnemonic_phrase}");
 
     let mut file = File::create("validator_key.txt")?;
