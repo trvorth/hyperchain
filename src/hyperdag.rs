@@ -341,8 +341,6 @@ impl HyperBlock {
         for parent in data.parents {
             hasher.update(parent.as_bytes());
         }
-        // The integrity of the transaction list is captured by the merkle_root.
-        // Hashing each transaction individually here is redundant for a block-level signature.
         hasher.update(data.timestamp.to_be_bytes());
         hasher.update(data.nonce.to_be_bytes());
         hasher.update(data.difficulty.to_be_bytes());
@@ -680,9 +678,7 @@ impl HyperDAG {
                 ),
             },
         ];
-        // FIX: The field name is `lattice_signature`, not `signature`.
-        // The type of `lattice_signature` in the Transaction struct is `Vec<u8>`,
-        // which matches the return type of `temp_lattice_signer.sign(...)`.
+        
         let reward_tx = Transaction {
             id: hex::encode(Keccak256::digest(
                 format!("coinbase_{now}_{chain_id_val}").as_bytes(),
@@ -713,7 +709,6 @@ impl HyperDAG {
                 }
             }
             if prev_chain != next_chain {
-                // Avoid double-adding if only 2 chains
                 if let Some(next_tips_set) = tips_guard.get(&next_chain) {
                     if let Some(tip_val) = next_tips_set.iter().next() {
                         cross_chain_references.push((next_chain, tip_val.clone()));
@@ -884,7 +879,6 @@ impl HyperDAG {
             .into_iter()
             .all(|res| res.unwrap_or(false))
         {
-            // FIX: Explicitly create a TransactionError variant instead of using .into()
             return Err(HyperDAGError::InvalidTransaction(
                 TransactionError::InvalidStructure(
                     "One or more transactions in block are invalid".to_string(),

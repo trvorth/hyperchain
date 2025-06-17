@@ -1,7 +1,7 @@
 use crate::config::{Config, ConfigError};
 use crate::hyperdag::{HyperBlock, HyperDAG};
 use crate::mempool::Mempool;
-use crate::miner::{Miner, MiningError};
+use crate::miner::{Miner, MinerConfig, MiningError}; // Import MinerConfig
 use crate::p2p::{P2PCommand, P2PError, P2PServer};
 use crate::transaction::{Transaction, UTXO};
 use crate::wallet::HyperWallet;
@@ -209,17 +209,20 @@ impl Node {
             }
         }
 
-        let miner_instance = Miner::new(
-            wallet.get_address(),
-            dag.clone(),
-            mempool.clone(),
-            format!("{:x}", config.difficulty),
-            config.target_block_time,
-            config.use_gpu,
-            config.zk_enabled,
-            config.mining_threads,
-            config.num_chains,
-        )?;
+        // FIX: Create a MinerConfig struct and pass it to Miner::new
+        let miner_config = MinerConfig {
+            address: wallet.get_address(),
+            dag: dag.clone(),
+            mempool: mempool.clone(),
+            difficulty_hex: format!("{:x}", config.difficulty),
+            target_block_time: config.target_block_time,
+            use_gpu: config.use_gpu,
+            zk_enabled: config.zk_enabled,
+            threads: config.mining_threads,
+            num_chains: config.num_chains,
+        };
+        let miner_instance = Miner::new(miner_config)?;
+
         let miner = Arc::new(miner_instance);
 
         info!(
@@ -264,7 +267,7 @@ impl Node {
         let peer_cache_path_clone = self.peer_cache_path.clone();
 
         let p2p_task_fut = async move {
-            let current_rx = rx_p2p_commands_for_p2p_task;
+            let mut current_rx = rx_p2p_commands_for_p2p_task;
             loop {
                 match P2PServer::new(
                     "hyperledger_node_internal",
