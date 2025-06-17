@@ -2,9 +2,10 @@ use crate::config::{Config, ConfigError};
 use crate::hyperdag::{HyperBlock, HyperDAG};
 use crate::mempool::Mempool;
 use crate::miner::{Miner, MiningError};
-use crate::p2p::{P2PCommand, P2PServer, P2PError};
+use crate::p2p::{P2PCommand, P2PError, P2PServer};
 use crate::transaction::{Transaction, UTXO};
 use crate::wallet::HyperWallet;
+use anyhow;
 use axum::{
     body::Body,
     extract::{Path as AxumPath, State, State as MiddlewareState},
@@ -13,9 +14,11 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use governor::{Quota, RateLimiter};
+use backoff::future::retry;
+use backoff::{Error as BackoffError, ExponentialBackoff};
 use governor::clock::QuantaClock;
 use governor::state::{InMemoryState, NotKeyed};
+use governor::{Quota, RateLimiter};
 use libp2p::identity;
 use libp2p::PeerId;
 use log::{debug, error, info, warn};
@@ -23,6 +26,7 @@ use nonzero_ext::nonzero;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
@@ -30,12 +34,8 @@ use std::time::Duration;
 use thiserror::Error;
 use tokio::signal;
 use tokio::sync::{mpsc, RwLock};
-use tokio::time::{self, Instant};
 use tokio::task::JoinSet;
-use backoff::{ExponentialBackoff, Error as BackoffError};
-use backoff::future::retry;
-use anyhow;
-use std::fs;
+use tokio::time::{self, Instant};
 use tracing::instrument;
 
 const MAX_UTXOS: usize = 1_000_000;
@@ -71,7 +71,6 @@ pub enum NodeError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
-
 
 #[derive(Serialize, Debug)]
 struct DagInfo {
@@ -128,22 +127,30 @@ impl Node {
         let local_keypair = match fs::read(p2p_identity_path) {
             Ok(key_bytes) => {
                 info!("Loading P2P identity from file: {p2p_identity_path}");
-                identity::Keypair::from_protobuf_encoding(&key_bytes)
-                    .map_err(|e| NodeError::P2PIdentity(format!("Failed to decode P2P identity key: {e}")))
+                identity::Keypair::from_protobuf_encoding(&key_bytes).map_err(|e| {
+                    NodeError::P2PIdentity(format!("Failed to decode P2P identity key: {e}"))
+                })
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                info!("P2P identity key file not found at {p2p_identity_path}, generating a new one.");
+                info!(
+                    "P2P identity key file not found at {p2p_identity_path}, generating a new one."
+                );
                 if let Some(p) = Path::new(p2p_identity_path).parent() {
                     fs::create_dir_all(p)?;
                 }
                 let new_key = identity::Keypair::generate_ed25519();
-                fs::write(p2p_identity_path, new_key.to_protobuf_encoding()
-                    .map_err(|e| NodeError::P2PIdentity(format!("Failed to encode P2P key: {e:?}")))?
+                fs::write(
+                    p2p_identity_path,
+                    new_key.to_protobuf_encoding().map_err(|e| {
+                        NodeError::P2PIdentity(format!("Failed to encode P2P key: {e:?}"))
+                    })?,
                 )?;
                 info!("New P2P identity key saved to {p2p_identity_path}");
                 Ok(new_key)
             }
-            Err(e) => Err(NodeError::P2PIdentity(format!("Failed to read P2P identity key file '{p2p_identity_path}': {e}"))),
+            Err(e) => Err(NodeError::P2PIdentity(format!(
+                "Failed to read P2P identity key file '{p2p_identity_path}': {e}"
+            ))),
         }?;
 
         let local_peer_id = PeerId::from(local_keypair.public());
@@ -167,13 +174,17 @@ impl Node {
         let signing_key_dalek = wallet.get_signing_key()?;
         let node_signing_key_bytes = signing_key_dalek.to_bytes().to_vec();
 
-        let dag = Arc::new(RwLock::new(HyperDAG::new(
-            &initial_validator,
-            config.target_block_time,
-            config.difficulty,
-            config.num_chains,
-            &node_signing_key_bytes,
-        ).await.map_err(|e| NodeError::DAG(e.to_string()))?));
+        let dag = Arc::new(RwLock::new(
+            HyperDAG::new(
+                &initial_validator,
+                config.target_block_time,
+                config.difficulty,
+                config.num_chains,
+                &node_signing_key_bytes,
+            )
+            .await
+            .map_err(|e| NodeError::DAG(e.to_string()))?,
+        ));
 
         let mempool = Arc::new(RwLock::new(Mempool::new(3600, 10_000_000, 10_000)));
         let utxos = Arc::new(RwLock::new(HashMap::with_capacity(MAX_UTXOS)));
@@ -182,7 +193,8 @@ impl Node {
         {
             let mut utxos_lock = utxos.write().await;
             for chain_id_val in 0..config.num_chains {
-                let genesis_id_convention = format!("genesis_placeholder_tx_id_for_chain_{chain_id_val}");
+                let genesis_id_convention =
+                    format!("genesis_placeholder_tx_id_for_chain_{chain_id_val}");
                 let utxo_id = format!("genesis_utxo_for_chain_{chain_id_val}");
                 utxos_lock.insert(
                     utxo_id.clone(),
@@ -270,8 +282,11 @@ impl Node {
                 {
                     Ok(mut p2p_server) => {
                         if !p2p_initial_peers_config_clone.is_empty() {
-                            if let Err(e) = p2p_command_sender_clone.send(P2PCommand::RequestState).await {
-                                 error!("Failed to send initial RequestState P2P command: {e}");
+                            if let Err(e) = p2p_command_sender_clone
+                                .send(P2PCommand::RequestState)
+                                .await
+                            {
+                                error!("Failed to send initial RequestState P2P command: {e}");
                             }
                         }
                         if let Err(e) = p2p_server.run(current_rx).await {
@@ -320,18 +335,31 @@ impl Node {
                             };
                             info!("Wallet balance: address={wallet_address}, balance={balance}");
 
-                            let proposals_result = time::timeout(Duration::from_secs(2), proposals_clone_miner.write()).await;
+                            let proposals_result = time::timeout(
+                                Duration::from_secs(2),
+                                proposals_clone_miner.write(),
+                            )
+                            .await;
                             if let Ok(mut proposals_guard) = proposals_result {
                                 if proposals_guard.len() >= MAX_PROPOSALS
-                                   && !proposals_guard.is_empty() { proposals_guard.remove(0); }
+                                    && !proposals_guard.is_empty()
+                                {
+                                    proposals_guard.remove(0);
+                                }
                                 proposals_guard.push(block.clone());
                                 if peers_present {
-                                    if let Err(e_send) = mining_tx_channel.try_send(P2PCommand::BroadcastBlock(block)) {
-                                        debug!("Failed to send mined block to P2P channel: {e_send}");
+                                    if let Err(e_send) = mining_tx_channel
+                                        .try_send(P2PCommand::BroadcastBlock(block))
+                                    {
+                                        debug!(
+                                            "Failed to send mined block to P2P channel: {e_send}"
+                                        );
                                     }
                                 } else {
                                     let mut dag_write_guard = dag_clone_miner.write().await;
-                                    if let Err(e) = dag_write_guard.add_block(block, &utxos_clone_miner).await {
+                                    if let Err(e) =
+                                        dag_write_guard.add_block(block, &utxos_clone_miner).await
+                                    {
                                         warn!("Failed to add self-mined block in single-node mode: {e}");
                                     } else {
                                         info!("Added self-mined block to DAG in single-node mode.");
@@ -344,23 +372,36 @@ impl Node {
                         Ok(None) => debug!("No block mined in this round"),
                         Err(e) => {
                             error!("Mining error: {e:?}");
-                        },
+                        }
                     }
 
                     if last_aggregation.elapsed() >= Duration::from_secs(5) {
-                        let proposals_result = time::timeout(Duration::from_secs(2), proposals_clone_miner.write()).await;
+                        let proposals_result =
+                            time::timeout(Duration::from_secs(2), proposals_clone_miner.write())
+                                .await;
                         if let Ok(mut proposals_guard) = proposals_result {
                             if !proposals_guard.is_empty() {
                                 let aggregated_block_result = {
                                     let dag_read_guard = dag_clone_miner.read().await;
-                                    dag_read_guard.aggregate_blocks(proposals_guard.clone(), &utxos_clone_miner).await
+                                    dag_read_guard
+                                        .aggregate_blocks(
+                                            proposals_guard.clone(),
+                                            &utxos_clone_miner,
+                                        )
+                                        .await
                                 };
                                 if let Ok(Some(block_to_add)) = aggregated_block_result {
                                     let mut dag_write_guard = dag_clone_miner.write().await;
-                                    if dag_write_guard.add_block(block_to_add.clone(), &utxos_clone_miner).await.unwrap_or(false) {
+                                    if dag_write_guard
+                                        .add_block(block_to_add.clone(), &utxos_clone_miner)
+                                        .await
+                                        .unwrap_or(false)
+                                    {
                                         info!("Added aggregated block {} to DAG", block_to_add.id);
                                         if peers_present {
-                                            if let Err(e_send) = mining_tx_channel.try_send(P2PCommand::BroadcastBlock(block_to_add)){
+                                            if let Err(e_send) = mining_tx_channel
+                                                .try_send(P2PCommand::BroadcastBlock(block_to_add))
+                                            {
                                                 debug!("Failed to send aggregated block to P2P channel: {e_send}");
                                             }
                                         }
@@ -371,7 +412,7 @@ impl Node {
                                 }
                             }
                         } else if let Err(_timeout_err) = proposals_result {
-                             error!("Mining loop proposals lock error on aggregation");
+                            error!("Mining loop proposals lock error on aggregation");
                         }
                         last_aggregation = Instant::now();
                     }
@@ -396,9 +437,12 @@ impl Node {
                     max_elapsed_time: Some(Duration::from_secs(30)),
                     ..Default::default()
                 };
-                let rate_limiter_info: Arc<DirectApiRateLimiter> = Arc::new(RateLimiter::direct(Quota::per_second(nonzero!(20u32))));
-                let rate_limiter_balance: Arc<DirectApiRateLimiter> = Arc::new(RateLimiter::direct(Quota::per_second(nonzero!(30u32))));
-                let rate_limiter_tx: Arc<DirectApiRateLimiter> = Arc::new(RateLimiter::direct(Quota::per_second(nonzero!(15u32))));
+                let rate_limiter_info: Arc<DirectApiRateLimiter> =
+                    Arc::new(RateLimiter::direct(Quota::per_second(nonzero!(20u32))));
+                let rate_limiter_balance: Arc<DirectApiRateLimiter> =
+                    Arc::new(RateLimiter::direct(Quota::per_second(nonzero!(30u32))));
+                let rate_limiter_tx: Arc<DirectApiRateLimiter> =
+                    Arc::new(RateLimiter::direct(Quota::per_second(nonzero!(15u32))));
 
                 let app = Router::new()
                     .route("/info", get(info_handler))
@@ -410,9 +454,18 @@ impl Node {
                     .route("/health", get(health_check))
                     .route("/mempool", get(mempool_handler))
                     .route("/publish-readiness", get(publish_readiness_handler))
-                    .layer(middleware::from_fn_with_state(rate_limiter_info.clone(), |s,r,n| rate_limit_layer(s,r,n, "/info")))
-                    .layer(middleware::from_fn_with_state(rate_limiter_balance.clone(), |s,r,n| rate_limit_layer(s,r,n, "/balance")))
-                    .layer(middleware::from_fn_with_state(rate_limiter_tx.clone(), |s,r,n| rate_limit_layer(s,r,n, "/transaction")))
+                    .layer(middleware::from_fn_with_state(
+                        rate_limiter_info.clone(),
+                        |s, r, n| rate_limit_layer(s, r, n, "/info"),
+                    ))
+                    .layer(middleware::from_fn_with_state(
+                        rate_limiter_balance.clone(),
+                        |s, r, n| rate_limit_layer(s, r, n, "/balance"),
+                    ))
+                    .layer(middleware::from_fn_with_state(
+                        rate_limiter_tx.clone(),
+                        |s, r, n| rate_limit_layer(s, r, n, "/transaction"),
+                    ))
                     .with_state(app_state.clone());
 
                 match retry(backoff, || async {
@@ -431,19 +484,18 @@ impl Node {
                         })?;
                     Ok(())
                 })
-                .await {
+                .await
+                {
                     Ok(_) => {
                         info!("API server task completed (this is unexpected for an indefinite server).");
                         Ok(())
-                    },
-                    Err(e) => {
-                        match e {
-                            BackoffError::Permanent(ne) | BackoffError::Transient { err: ne, .. } => {
-                                error!("API server failed permanently after retries: {ne:?}");
-                                Err(ne)
-                            },
-                        }
                     }
+                    Err(e) => match e {
+                        BackoffError::Permanent(ne) | BackoffError::Transient { err: ne, .. } => {
+                            error!("API server failed permanently after retries: {ne:?}");
+                            Err(ne)
+                        }
+                    },
                 }
             }
         };
@@ -498,13 +550,16 @@ async fn rate_limit_layer(
     route_name: &str,
 ) -> Result<axum::response::Response, StatusCode> {
     if limiter.check().is_err() {
-        warn!("API rate limit exceeded for {}: {:?}", route_name, req.uri());
+        warn!(
+            "API rate limit exceeded for {}: {:?}",
+            route_name,
+            req.uri()
+        );
         Err(StatusCode::TOO_MANY_REQUESTS)
     } else {
         Ok(next.run(req).await)
     }
 }
-
 
 #[derive(Clone)]
 struct AppState {
@@ -514,7 +569,9 @@ struct AppState {
     api_address: String,
 }
 
-async fn info_handler(State(state): State<AppState>) -> Result<Json<serde_json::Value>, StatusCode> {
+async fn info_handler(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
     let dag_read_guard = time::timeout(Duration::from_secs(2), state.dag.read())
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -541,12 +598,16 @@ async fn info_handler(State(state): State<AppState>) -> Result<Json<serde_json::
     })))
 }
 
-async fn mempool_handler(State(state): State<AppState>) -> Result<Json<HashMap<String, Transaction>>, StatusCode> {
+async fn mempool_handler(
+    State(state): State<AppState>,
+) -> Result<Json<HashMap<String, Transaction>>, StatusCode> {
     let mempool_read_guard = state.mempool.read().await;
     Ok(Json(mempool_read_guard.get_transactions().await))
 }
 
-async fn publish_readiness_handler(State(state): State<AppState>) -> Result<Json<PublishReadiness>, StatusCode> {
+async fn publish_readiness_handler(
+    State(state): State<AppState>,
+) -> Result<Json<PublishReadiness>, StatusCode> {
     let dag_read_guard = state.dag.read().await;
     let mempool_read_guard = state.mempool.read().await;
     let utxos_read_guard = state.utxos.read().await;
@@ -570,7 +631,10 @@ async fn publish_readiness_handler(State(state): State<AppState>) -> Result<Json
     }))
 }
 
-async fn get_balance(State(state): State<AppState>, AxumPath(address): AxumPath<String>) -> Result<Json<u64>, StatusCode> {
+async fn get_balance(
+    State(state): State<AppState>,
+    AxumPath(address): AxumPath<String>,
+) -> Result<Json<u64>, StatusCode> {
     if !Regex::new(ADDRESS_REGEX).unwrap().is_match(&address) {
         warn!("Invalid address format for balance check: {address}");
         return Err(StatusCode::BAD_REQUEST);
@@ -584,7 +648,10 @@ async fn get_balance(State(state): State<AppState>, AxumPath(address): AxumPath<
     Ok(Json(balance))
 }
 
-async fn get_utxos(State(state): State<AppState>, AxumPath(address): AxumPath<String>) -> Result<Json<HashMap<String, UTXO>>, StatusCode> {
+async fn get_utxos(
+    State(state): State<AppState>,
+    AxumPath(address): AxumPath<String>,
+) -> Result<Json<HashMap<String, UTXO>>, StatusCode> {
     if !Regex::new(ADDRESS_REGEX).unwrap().is_match(&address) {
         warn!("Invalid address format for UTXO fetch: {address}");
         return Err(StatusCode::BAD_REQUEST);
@@ -602,13 +669,22 @@ async fn submit_transaction(
     State(state): State<AppState>,
     Json(tx_data): Json<Transaction>,
 ) -> Result<Json<String>, StatusCode> {
-        if !Regex::new(ADDRESS_REGEX).unwrap().is_match(&tx_data.sender)
-        || !Regex::new(ADDRESS_REGEX).unwrap().is_match(&tx_data.receiver) {
-        warn!("Invalid sender or receiver address in transaction: {}", tx_data.id);
+    if !Regex::new(ADDRESS_REGEX).unwrap().is_match(&tx_data.sender)
+        || !Regex::new(ADDRESS_REGEX)
+            .unwrap()
+            .is_match(&tx_data.receiver)
+    {
+        warn!(
+            "Invalid sender or receiver address in transaction: {}",
+            tx_data.id
+        );
         return Err(StatusCode::BAD_REQUEST);
     }
     if tx_data.amount == 0 && !tx_data.inputs.is_empty() {
-        warn!("Invalid transaction amount (0 for non-coinbase): {}", tx_data.id);
+        warn!(
+            "Invalid transaction amount (0 for non-coinbase): {}",
+            tx_data.id
+        );
         return Err(StatusCode::BAD_REQUEST);
     }
 
@@ -617,30 +693,45 @@ async fn submit_transaction(
     let dag_read_guard = state.dag.read().await;
 
     if tx_data.verify(&state.dag, &state.utxos).await.is_err() {
-        warn!("Transaction {} failed full verification via API", tx_data.id);
+        warn!(
+            "Transaction {} failed full verification via API",
+            tx_data.id
+        );
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    match mempool_write_guard.add_transaction(tx_data.clone(), &utxos_read_guard, &dag_read_guard).await {
+    match mempool_write_guard
+        .add_transaction(tx_data.clone(), &utxos_read_guard, &dag_read_guard)
+        .await
+    {
         Ok(_) => {
             info!("Transaction {} added to mempool via API", tx_data.id);
             Ok(Json(tx_data.id.clone()))
         }
         Err(mempool_err) => {
-            warn!("Failed to add transaction {} to mempool: {}", tx_data.id, mempool_err);
+            warn!(
+                "Failed to add transaction {} to mempool: {}",
+                tx_data.id, mempool_err
+            );
             Err(StatusCode::BAD_REQUEST)
         }
     }
 }
 
-async fn get_block(State(state): State<AppState>, AxumPath(id_str): AxumPath<String>) -> Result<Json<HyperBlock>, StatusCode> {
+async fn get_block(
+    State(state): State<AppState>,
+    AxumPath(id_str): AxumPath<String>,
+) -> Result<Json<HyperBlock>, StatusCode> {
     if id_str.len() > 128 || id_str.is_empty() {
         warn!("Invalid block ID length: {id_str}");
         return Err(StatusCode::BAD_REQUEST);
     }
     let dag_read_guard = state.dag.read().await;
     let blocks_read_guard = dag_read_guard.blocks.read().await;
-    let block_data = blocks_read_guard.get(&id_str).cloned().ok_or(StatusCode::NOT_FOUND)?;
+    let block_data = blocks_read_guard
+        .get(&id_str)
+        .cloned()
+        .ok_or(StatusCode::NOT_FOUND)?;
     Ok(Json(block_data))
 }
 
@@ -701,11 +792,15 @@ mod tests {
             mining_threads: 1,
             num_chains: 1,
             mining_chain_id: 0,
-            logging: LoggingConfig { level: "debug".to_string() },
+            logging: LoggingConfig {
+                level: "debug".to_string(),
+            },
             p2p: P2pConfig::default(),
         };
 
-        test_config.save(&temp_config_path).expect("Failed to save initial temp config for test");
+        test_config
+            .save(&temp_config_path)
+            .expect("Failed to save initial temp config for test");
 
         // Node::new now takes the config object directly and its path
         let node_instance_result = Node::new(
@@ -717,18 +812,31 @@ mod tests {
         )
         .await;
 
-        assert!(node_instance_result.is_ok(), "Node::new failed: {:?}", node_instance_result.err());
+        assert!(
+            node_instance_result.is_ok(),
+            "Node::new failed: {:?}",
+            node_instance_result.err()
+        );
         let node_instance = node_instance_result.unwrap();
 
         // Check if the config file was updated by Node::new
-        let updated_config = Config::load(&temp_config_path).expect("Failed to load updated temp config");
+        let updated_config =
+            Config::load(&temp_config_path).expect("Failed to load updated temp config");
         assert!(updated_config.local_full_p2p_address.is_some());
         let full_addr = updated_config.local_full_p2p_address.unwrap();
-        assert!(full_addr.contains(&node_instance.p2p_identity_keypair.public().to_peer_id().to_string()));
+        assert!(full_addr.contains(
+            &node_instance
+                .p2p_identity_keypair
+                .public()
+                .to_peer_id()
+                .to_string()
+        ));
         assert!(full_addr.starts_with(&updated_config.p2p_address));
 
-
-        assert!(node_instance.config.p2p_address.contains("/ip4/127.0.0.1/tcp/"));
+        assert!(node_instance
+            .config
+            .p2p_address
+            .contains("/ip4/127.0.0.1/tcp/"));
         assert!(node_instance.config.api_address.contains("127.0.0.1:"));
         assert_eq!(node_instance._mining_chain_id, 0);
 
@@ -737,10 +845,14 @@ mod tests {
         let expected_genesis_tx_id = "genesis_placeholder_tx_id_for_chain_0".to_string();
         let utxo_key_expected = "genesis_utxo_for_chain_0".to_string();
 
-        let genesis_utxo_entry = utxos_guard.get(&utxo_key_expected).expect("Genesis UTXO not found");
+        let genesis_utxo_entry = utxos_guard
+            .get(&utxo_key_expected)
+            .expect("Genesis UTXO not found");
         assert_eq!(genesis_utxo_entry.amount, 100);
-        assert_eq!(genesis_utxo_entry.address.to_lowercase(),
-                       genesis_validator_addr.to_lowercase());
+        assert_eq!(
+            genesis_utxo_entry.address.to_lowercase(),
+            genesis_validator_addr.to_lowercase()
+        );
         assert_eq!(genesis_utxo_entry.tx_id, expected_genesis_tx_id);
 
         // Cleanup the temporary config file

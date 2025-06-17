@@ -1,5 +1,5 @@
-use std::time::Duration;
 use reqwest::Client;
+use std::time::Duration;
 use tokio::time;
 
 struct Node {
@@ -43,7 +43,10 @@ async fn main() {
         print!("\x1B[2J\x1B[1;1H"); // Clear screen and move cursor to top-left
 
         println!("--- HyperChain Global Testnet Monitor (API) ---");
-        println!("{:<22} | {:<20} | {:<15}", "Node", "Peer ID", "Total Blocks");
+        println!(
+            "{:<22} | {:<20} | {:<15}",
+            "Node", "Peer ID", "Total Blocks"
+        );
         println!("{:-<23}|{:-<22}|{:-<16}", "", "", "");
 
         for node in &nodes {
@@ -51,14 +54,14 @@ async fn main() {
                 Ok(status) => {
                     let peer_id = status["peer_id"].as_str().unwrap_or("N/A");
                     let blocks = status["total_blocks"].as_u64().unwrap_or(0);
-                    
+
                     // Display a shortened, more readable version of the peer ID
                     let short_peer_id = if peer_id.len() > 12 {
                         format!("...{}", &peer_id[peer_id.len() - 12..])
                     } else {
                         peer_id.to_string()
                     };
-                    
+
                     println!("{:<22} | {:<20} | {:<15}", node.name, short_peer_id, blocks);
                 }
                 Err(e) => {
@@ -74,6 +77,9 @@ async fn main() {
                 }
             }
         }
-        println!("\nLast updated: {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"));
+        println!(
+            "\nLast updated: {}",
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+        );
     }
 }

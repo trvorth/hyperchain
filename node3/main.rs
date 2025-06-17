@@ -34,8 +34,9 @@ async fn main() -> Result<()> {
     let peer_cache_path = "./node3/peer_cache.json";
 
     // --- Config Loading ---
-    let mut config = Config::load(config_path.to_str().unwrap())
-        .context(format!("{log_prefix} Failed to load config from {config_path:?}"))?;
+    let mut config = Config::load(config_path.to_str().unwrap()).context(format!(
+        "{log_prefix} Failed to load config from {config_path:?}"
+    ))?;
 
     // --- Logger Initialization ---
     let log_directives = format!(
@@ -49,7 +50,7 @@ async fn main() -> Result<()> {
         .ok();
 
     info!("{log_prefix} Starting HyperDAG Node...");
-    
+
     // --- UPGRADE: Load cached peers ---
     let cached_peers: Vec<String> = fs::read_to_string(peer_cache_path)
         .ok()
@@ -57,14 +58,18 @@ async fn main() -> Result<()> {
         .map_or_else(Vec::new, |cache| cache.peers);
 
     if !cached_peers.is_empty() {
-        info!("{} Loaded {} peers from cache file.", log_prefix, cached_peers.len());
+        info!(
+            "{} Loaded {} peers from cache file.",
+            log_prefix,
+            cached_peers.len()
+        );
         // Combine and deduplicate peers from config and cache
         let mut all_peers = HashSet::new();
         all_peers.extend(config.peers.iter().cloned());
         all_peers.extend(cached_peers.into_iter());
         config.peers = all_peers.into_iter().collect();
     }
-    
+
     // --- Wallet Loading/Generation ---
     if let Some(parent_dir) = PathBuf::from(wallet_path).parent() {
         fs::create_dir_all(parent_dir)?;

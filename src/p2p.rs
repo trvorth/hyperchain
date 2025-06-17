@@ -1,9 +1,9 @@
 use crate::hyperdag::{HyperBlock, HyperDAG, LatticeSignature};
 use crate::mempool::Mempool;
+use crate::node::PeerCache;
 use crate::transaction::{Transaction, UTXO};
-use crate::node::PeerCache; 
 use futures::stream::StreamExt;
-use governor::{Quota, RateLimiter, state::keyed::DashMapStateStore, clock::DefaultClock};
+use governor::{clock::DefaultClock, state::keyed::DashMapStateStore, Quota, RateLimiter};
 use hmac::{Hmac, Mac};
 use libp2p::{
     gossipsub::{self, IdentTopic, MessageAuthenticity, ValidationMode},
@@ -15,7 +15,7 @@ use libp2p::{
     swarm::{NetworkBehaviour, SwarmEvent},
     yamux, Multiaddr, PeerId, Swarm, SwarmBuilder,
 };
-use log::{error, info, warn, debug};
+use log::{debug, error, info, warn};
 use nonzero_ext::nonzero;
 use prometheus::{register_int_counter, IntCounter};
 use regex::Regex;
@@ -25,16 +25,16 @@ use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
 use std::env;
 use std::error::Error as StdError;
+use std::fs;
+use std::hash::Hash;
 use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
-use std::fs;
 use tokio::{
     sync::{mpsc, RwLock},
     time::{interval, timeout},
 };
 use tracing::instrument;
-use std::hash::Hash;
 
 const MAX_MESSAGE_SIZE: usize = 2_000_000;
 const ADDRESS_REGEX: &str = r"^[0-9a-fA-F]{64}$";
@@ -120,7 +120,6 @@ impl From<KadEvent> for NodeBehaviourEvent {
     }
 }
 
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NetworkMessage {
     data: NetworkMessageData,
@@ -146,7 +145,11 @@ impl NetworkMessage {
         let temp_lattice_signer = LatticeSignature::new(lattice_key_material);
         let lattice_sig = temp_lattice_signer.sign(&serialized_data);
 
-        Ok(Self { data, hmac, lattice_sig })
+        Ok(Self {
+            data,
+            hmac,
+            lattice_sig,
+        })
     }
 
     fn get_hmac_secret() -> String {
@@ -159,7 +162,8 @@ impl NetworkMessage {
     }
 
     fn compute_hmac(data: &[u8], secret: &str) -> Result<Vec<u8>, P2PError> {
-        let mut hmac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).map_err(|_| P2PError::HmacKeyLength)?;
+        let mut hmac = Hmac::<Sha256>::new_from_slice(secret.as_bytes())
+            .map_err(|_| P2PError::HmacKeyLength)?;
         hmac.update(data);
         Ok(hmac.finalize().into_bytes().to_vec())
     }
@@ -192,7 +196,14 @@ pub struct P2PServer {
 }
 
 impl P2PServer {
-    #[instrument(skip(dag, mempool, utxos, proposals, local_keypair, node_signing_key_material))]
+    #[instrument(skip(
+        dag,
+        mempool,
+        utxos,
+        proposals,
+        local_keypair,
+        node_signing_key_material
+    ))]
     pub async fn new(
         topic_prefix: &str,
         listen_addresses: Vec<String>,
@@ -213,9 +224,15 @@ impl P2PServer {
 
         for peer_addr_str in &initial_peers {
             if let Ok(multiaddr) = peer_addr_str.parse::<Multiaddr>() {
-                 if let Some(peer_id) = multiaddr.iter().find_map(|p| if let libp2p::multiaddr::Protocol::P2p(id) = p { Some(id) } else { None }) {
+                if let Some(peer_id) = multiaddr.iter().find_map(|p| {
+                    if let libp2p::multiaddr::Protocol::P2p(id) = p {
+                        Some(id)
+                    } else {
+                        None
+                    }
+                }) {
                     kademlia_behaviour.add_address(&peer_id, multiaddr);
-                 }
+                }
             }
         }
 
@@ -248,7 +265,7 @@ impl P2PServer {
             .build();
 
         if !initial_peers.is_empty() {
-             if let Err(e) = swarm.behaviour_mut().kademlia.bootstrap() {
+            if let Err(e) = swarm.behaviour_mut().kademlia.bootstrap() {
                 warn!("Failed to start Kademlia bootstrap: {e:?}");
             }
         }
@@ -284,12 +301,18 @@ impl P2PServer {
         })
     }
 
-    fn build_gossipsub_behaviour(local_key: identity::Keypair) -> Result<gossipsub::Behaviour, P2PError> {
+    fn build_gossipsub_behaviour(
+        local_key: identity::Keypair,
+    ) -> Result<gossipsub::Behaviour, P2PError> {
         let message_id_fn = |message: &gossipsub::Message| {
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
             message.data.hash(&mut hasher);
-            if let Some(s) = message.source.as_ref() { s.hash(&mut hasher) }
-            if let Some(s) = message.sequence_number { s.hash(&mut hasher) }
+            if let Some(s) = message.source.as_ref() {
+                s.hash(&mut hasher)
+            }
+            if let Some(s) = message.sequence_number {
+                s.hash(&mut hasher)
+            }
             gossipsub::MessageId::from(std::hash::Hasher::finish(&hasher).to_string())
         };
 
@@ -303,16 +326,21 @@ impl P2PServer {
             .mesh_n_high(6)
             .message_id_fn(message_id_fn)
             .build()
-            .map_err(|e_str| P2PError::GossipsubConfig(format!("Error building Gossipsub config: {e_str}")))?;
+            .map_err(|e_str| {
+                P2PError::GossipsubConfig(format!("Error building Gossipsub config: {e_str}"))
+            })?;
 
-        gossipsub::Behaviour::new(
-            MessageAuthenticity::Signed(local_key),
-            gossipsub_config,
+        gossipsub::Behaviour::new(MessageAuthenticity::Signed(local_key), gossipsub_config).map_err(
+            |e_str| {
+                P2PError::GossipsubConfig(format!("Error creating Gossipsub behaviour: {e_str}"))
+            },
         )
-        .map_err(|e_str| P2PError::GossipsubConfig(format!("Error creating Gossipsub behaviour: {e_str}")))
     }
 
-    fn subscribe_to_topics(topic_prefix: &str, gossipsub: &mut gossipsub::Behaviour) -> Result<Vec<IdentTopic>, P2PError> {
+    fn subscribe_to_topics(
+        topic_prefix: &str,
+        gossipsub: &mut gossipsub::Behaviour,
+    ) -> Result<Vec<IdentTopic>, P2PError> {
         let topics_str = [
             format!("/hyperchain/{topic_prefix}/blocks"),
             format!("/hyperchain/{topic_prefix}/transactions"),
@@ -327,7 +355,11 @@ impl P2PServer {
         Ok(topics)
     }
 
-    fn listen_on_addresses(swarm: &mut Swarm<NodeBehaviour>, addresses: &[String], local_peer_id: &PeerId) -> Result<(), P2PError> {
+    fn listen_on_addresses(
+        swarm: &mut Swarm<NodeBehaviour>,
+        addresses: &[String],
+        local_peer_id: &PeerId,
+    ) -> Result<(), P2PError> {
         if addresses.is_empty() {
             warn!("No explicit listen addresses provided. Node will attempt to listen on default OS-assigned addresses.");
         }
@@ -343,8 +375,13 @@ impl P2PServer {
     }
 
     async fn dial_initial_peers(swarm: &mut Swarm<NodeBehaviour>, peers_addrs: &[String]) {
-        if peers_addrs.is_empty() { return; }
-        info!("Attempting to dial {} initial peers from configuration.", peers_addrs.len());
+        if peers_addrs.is_empty() {
+            return;
+        }
+        info!(
+            "Attempting to dial {} initial peers from configuration.",
+            peers_addrs.len()
+        );
         tokio::time::sleep(Duration::from_millis(500)).await;
         for peer_addr_str in peers_addrs {
             match peer_addr_str.parse::<Multiaddr>() {
@@ -387,24 +424,47 @@ impl P2PServer {
     async fn handle_swarm_event(&mut self, event: SwarmEvent<NodeBehaviourEvent>) {
         match event {
             SwarmEvent::NewListenAddr { address, .. } => {
-                info!("P2P Server listening on: {}/p2p/{}", address, self.swarm.local_peer_id());
+                info!(
+                    "P2P Server listening on: {}/p2p/{}",
+                    address,
+                    self.swarm.local_peer_id()
+                );
             }
-            SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
+            SwarmEvent::ConnectionEstablished {
+                peer_id, endpoint, ..
+            } => {
                 self.known_peers.write().await.insert(peer_id);
                 info!("Connection established with peer: {peer_id}");
-                self.swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
+                self.swarm
+                    .behaviour_mut()
+                    .gossipsub
+                    .add_explicit_peer(&peer_id);
                 let addr = endpoint.get_remote_address().clone();
-                self.swarm.behaviour_mut().kademlia.add_address(&peer_id, addr);
+                self.swarm
+                    .behaviour_mut()
+                    .kademlia
+                    .add_address(&peer_id, addr);
             }
             SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
                 self.known_peers.write().await.remove(&peer_id);
-                self.swarm.behaviour_mut().gossipsub.remove_explicit_peer(&peer_id);
-                info!("Connection closed with peer: {}, cause: {:?}", peer_id, cause.map(|c| c.to_string()));
+                self.swarm
+                    .behaviour_mut()
+                    .gossipsub
+                    .remove_explicit_peer(&peer_id);
+                info!(
+                    "Connection closed with peer: {}, cause: {:?}",
+                    peer_id,
+                    cause.map(|c| c.to_string())
+                );
             }
             SwarmEvent::Behaviour(behaviour_event) => match behaviour_event {
-                NodeBehaviourEvent::Gossipsub(gossipsub::Event::Message { propagation_source, message_id, message }) => {
+                NodeBehaviourEvent::Gossipsub(gossipsub::Event::Message {
+                    propagation_source,
+                    message_id,
+                    message,
+                }) => {
                     debug!("GossipSub: Received message (ID: {message_id}) from peer: {propagation_source}");
-                    
+
                     // Clone Arcs to move into the spawned task
                     let dag_clone = self.dag.clone();
                     let mempool_clone = self.mempool.clone();
@@ -415,41 +475,64 @@ impl P2PServer {
                     let rl_tx_clone = self.rate_limiter_tx.clone();
                     let rl_state_clone = self.rate_limiter_state.clone();
                     let pk_material_clone = self.node_lattice_signing_key_bytes.clone();
-                    
+
                     // Spawn a separate task to process the message to avoid blocking the event loop
                     tokio::spawn(async move {
                         P2PServer::static_process_gossip_message(
-                            message, propagation_source, blacklist_clone,
-                            rl_block_clone, rl_tx_clone, rl_state_clone,
-                            pk_material_clone, dag_clone, mempool_clone,
-                            utxos_clone, proposals_clone,
-                        ).await;
+                            message,
+                            propagation_source,
+                            blacklist_clone,
+                            rl_block_clone,
+                            rl_tx_clone,
+                            rl_state_clone,
+                            pk_material_clone,
+                            dag_clone,
+                            mempool_clone,
+                            utxos_clone,
+                            proposals_clone,
+                        )
+                        .await;
                     });
                 }
                 NodeBehaviourEvent::Mdns(MdnsEvent::Discovered(list)) => {
                     for (peer_id, multiaddr) in list {
                         info!("mDNS: Discovered peer {peer_id} at {multiaddr}");
-                        self.swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
-                        self.swarm.behaviour_mut().kademlia.add_address(&peer_id, multiaddr);
+                        self.swarm
+                            .behaviour_mut()
+                            .gossipsub
+                            .add_explicit_peer(&peer_id);
+                        self.swarm
+                            .behaviour_mut()
+                            .kademlia
+                            .add_address(&peer_id, multiaddr);
                     }
                 }
                 NodeBehaviourEvent::Mdns(MdnsEvent::Expired(list)) => {
-                     for (peer_id, multiaddr) in list {
+                    for (peer_id, multiaddr) in list {
                         debug!("mDNS: Expired peer {peer_id} at {multiaddr}");
                         if !self.swarm.is_connected(&peer_id) {
-                            self.swarm.behaviour_mut().gossipsub.remove_explicit_peer(&peer_id);
+                            self.swarm
+                                .behaviour_mut()
+                                .gossipsub
+                                .remove_explicit_peer(&peer_id);
                         }
                     }
                 }
                 NodeBehaviourEvent::Kademlia(kad_event) => {
                     debug!("Kademlia event: {kad_event:?}");
-                },
+                }
                 NodeBehaviourEvent::Gossipsub(other_gossip_event) => {
                     debug!("Other Gossipsub event: {other_gossip_event:?}");
                 }
             },
             SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
-                warn!("Outgoing connection error to peer {:?}: {}", peer_id.map(|p| p.to_string()).unwrap_or_else(|| "unknown".to_string()), error);
+                warn!(
+                    "Outgoing connection error to peer {:?}: {}",
+                    peer_id
+                        .map(|p| p.to_string())
+                        .unwrap_or_else(|| "unknown".to_string()),
+                    error
+                );
             }
             other_event => {
                 debug!("Unhandled swarm event: {other_event:?}");
@@ -472,11 +555,17 @@ impl P2PServer {
             return Ok(());
         }
 
-        let cache = PeerCache { peers: peers.into_iter().collect() };
+        let cache = PeerCache {
+            peers: peers.into_iter().collect(),
+        };
         let cache_json = serde_json::to_string_pretty(&cache)?;
 
         fs::write(&self.peer_cache_path, cache_json)?;
-        info!("Successfully saved {} peers to cache file: {}", cache.peers.len(), self.peer_cache_path);
+        info!(
+            "Successfully saved {} peers to cache file: {}",
+            cache.peers.len(),
+            self.peer_cache_path
+        );
 
         Ok(())
     }
@@ -528,7 +617,13 @@ impl P2PServer {
         }
 
         if message.data.len() > MAX_MESSAGE_SIZE {
-            warn!("Message from peer {} on topic {} exceeds MAX_MESSAGE_SIZE ({} > {})", source, topic_str, message.data.len(), MAX_MESSAGE_SIZE);
+            warn!(
+                "Message from peer {} on topic {} exceeds MAX_MESSAGE_SIZE ({} > {})",
+                source,
+                topic_str,
+                message.data.len(),
+                MAX_MESSAGE_SIZE
+            );
             return;
         }
 
@@ -563,9 +658,22 @@ impl P2PServer {
         MESSAGES_RECEIVED.inc();
         info!("Processing verified (HMAC) message data from {source} on topic {topic_str}");
         match msg_payload.data {
-            NetworkMessageData::Block(block) => P2PServer::static_process_block(block, source, dag, utxos, proposals).await,
-            NetworkMessageData::Transaction(tx) => P2PServer::static_process_transaction(tx, source, mempool, dag, utxos).await,
-            NetworkMessageData::State(blocks_map, new_utxos_map) => P2PServer::static_process_state_sync_data(blocks_map, new_utxos_map, source, dag, utxos).await,
+            NetworkMessageData::Block(block) => {
+                P2PServer::static_process_block(block, source, dag, utxos, proposals).await
+            }
+            NetworkMessageData::Transaction(tx) => {
+                P2PServer::static_process_transaction(tx, source, mempool, dag, utxos).await
+            }
+            NetworkMessageData::State(blocks_map, new_utxos_map) => {
+                P2PServer::static_process_state_sync_data(
+                    blocks_map,
+                    new_utxos_map,
+                    source,
+                    dag,
+                    utxos,
+                )
+                .await
+            }
             NetworkMessageData::StateRequest => {
                 info!("Received StateRequest from peer {source}. Preparing to send current state.");
                 let dag_guard = dag.read().await;
@@ -586,14 +694,20 @@ impl P2PServer {
         debug!("Processing block (ID: {}) from peer {}", block.id, source);
         let address_regex = Regex::new(ADDRESS_REGEX).unwrap();
         if !address_regex.is_match(&block.validator) || !address_regex.is_match(&block.miner) {
-            warn!("Block from {} (ID: {}) has invalid validator/miner address format.", source, block.id);
+            warn!(
+                "Block from {} (ID: {}) has invalid validator/miner address format.",
+                source, block.id
+            );
             return;
         }
 
         let mut dag_write_lock = match timeout(Duration::from_millis(500), dag.write()).await {
             Ok(guard) => guard,
             Err(_) => {
-                warn!("Timeout acquiring DAG write lock for block {} from {}", block.id, source);
+                warn!(
+                    "Timeout acquiring DAG write lock for block {} from {}",
+                    block.id, source
+                );
                 return;
             }
         };
@@ -604,23 +718,33 @@ impl P2PServer {
         };
 
         if block_exists {
-             debug!("Block {} from {} already known.", block.id, source);
-             return;
+            debug!("Block {} from {} already known.", block.id, source);
+            return;
         }
 
-        if dag_write_lock.is_valid_block(&block, &utxos).await.unwrap_or(false) {
+        if dag_write_lock
+            .is_valid_block(&block, &utxos)
+            .await
+            .unwrap_or(false)
+        {
             let block_id_clone = block.id.clone();
             if let Err(e) = dag_write_lock.add_block(block.clone(), &utxos).await {
-                 warn!("Failed to add block (id: {block_id_clone}) from {source}: {e}");
+                warn!("Failed to add block (id: {block_id_clone}) from {source}: {e}");
             } else {
-                 info!("Successfully processed and added block (id: {block_id_clone}) from {source}");
-                 let mut proposals_lock = proposals.write().await;
-                 if proposals_lock.len() >= MAX_PROPOSALS
-                     && !proposals_lock.is_empty() { proposals_lock.remove(0); }
-                 proposals_lock.push(block);
+                info!(
+                    "Successfully processed and added block (id: {block_id_clone}) from {source}"
+                );
+                let mut proposals_lock = proposals.write().await;
+                if proposals_lock.len() >= MAX_PROPOSALS && !proposals_lock.is_empty() {
+                    proposals_lock.remove(0);
+                }
+                proposals_lock.push(block);
             }
         } else {
-            warn!("Block from {} (id: {}) failed validation.", source, block.id);
+            warn!(
+                "Block from {} (id: {}) failed validation.",
+                source, block.id
+            );
         }
     }
 
@@ -637,7 +761,10 @@ impl P2PServer {
             || !address_regex.is_match(&tx.receiver)
             || (tx.amount == 0 && !tx.inputs.is_empty())
         {
-            warn!("Transaction {} from {} has invalid sender/receiver/amount.", tx.id, source);
+            warn!(
+                "Transaction {} from {} has invalid sender/receiver/amount.",
+                tx.id, source
+            );
             return;
         }
 
@@ -646,7 +773,10 @@ impl P2PServer {
         let dag_read_guard = dag.read().await;
 
         let tx_id_for_log = tx.id.clone();
-        if let Err(e) = mempool_lock.add_transaction(tx, &utxos_read_guard, &dag_read_guard).await {
+        if let Err(e) = mempool_lock
+            .add_transaction(tx, &utxos_read_guard, &dag_read_guard)
+            .await
+        {
             warn!("Failed to add transaction {tx_id_for_log} from {source} to mempool: {e}");
         } else {
             info!("Added transaction {tx_id_for_log} from {source} to mempool.");
@@ -660,7 +790,12 @@ impl P2PServer {
         dag: Arc<RwLock<HyperDAG>>,
         utxos_arc: Arc<RwLock<HashMap<String, UTXO>>>,
     ) {
-        info!("Processing state sync data ({} blocks, {} UTXOs) from peer {}", blocks_map.len(), new_utxos_map.len(), source);
+        info!(
+            "Processing state sync data ({} blocks, {} UTXOs) from peer {}",
+            blocks_map.len(),
+            new_utxos_map.len(),
+            source
+        );
 
         let mut dag_write_lock = match timeout(Duration::from_millis(1000), dag.write()).await {
             Ok(guard) => guard,
@@ -677,44 +812,66 @@ impl P2PServer {
             let existing_blocks_guard = dag_write_lock.blocks.read().await;
             for (_id, block) in blocks_map.iter() {
                 if !existing_blocks_guard.contains_key(&block.id) {
-                    if dag_write_lock.is_valid_block(block, &utxos_arc).await.unwrap_or(false) {
+                    if dag_write_lock
+                        .is_valid_block(block, &utxos_arc)
+                        .await
+                        .unwrap_or(false)
+                    {
                         blocks_to_add_valid.push(block.clone());
                     } else {
-                        warn!("Invalid block {} during state sync validation from {}", block.id, source);
+                        warn!(
+                            "Invalid block {} during state sync validation from {}",
+                            block.id, source
+                        );
                     }
                 }
             }
-        } 
+        }
 
         for block in blocks_to_add_valid {
             if let Err(e) = dag_write_lock.add_block(block.clone(), &utxos_arc).await {
-                warn!("Failed to add block {} during state sync from {}: {}", block.id, source, e);
+                warn!(
+                    "Failed to add block {} during state sync from {}: {}",
+                    block.id, source, e
+                );
             } else {
                 added_blocks_count += 1;
             }
         }
-        drop(dag_write_lock); 
+        drop(dag_write_lock);
 
-        let mut utxos_write_lock = match timeout(Duration::from_millis(500), utxos_arc.write()).await {
-            Ok(guard) => guard,
-            Err(_) => {
-                warn!("Timeout acquiring UTXOs write lock for state sync from {source}");
-                return;
-            }
-        };
+        let mut utxos_write_lock =
+            match timeout(Duration::from_millis(500), utxos_arc.write()).await {
+                Ok(guard) => guard,
+                Err(_) => {
+                    warn!("Timeout acquiring UTXOs write lock for state sync from {source}");
+                    return;
+                }
+            };
         utxos_write_lock.clear();
         utxos_write_lock.extend(new_utxos_map.into_iter());
-        info!("State sync: added {} blocks and fully updated UTXO set ({}) from peer: {}", added_blocks_count, utxos_write_lock.len(), source);
+        info!(
+            "State sync: added {} blocks and fully updated UTXO set ({}) from peer: {}",
+            added_blocks_count,
+            utxos_write_lock.len(),
+            source
+        );
     }
-
 
     async fn check_mesh_peers(&mut self) {
         for topic_instance in &self.topics {
             let topic_hash = topic_instance.hash();
-            let mesh_peers: Vec<_> = self.swarm.behaviour().gossipsub.mesh_peers(&topic_hash).collect();
+            let mesh_peers: Vec<_> = self
+                .swarm
+                .behaviour()
+                .gossipsub
+                .mesh_peers(&topic_hash)
+                .collect();
             let mesh_peer_count = mesh_peers.len();
 
-            debug!("Topic '{topic_instance}': {mesh_peer_count} mesh peers connected: {mesh_peers:?}");
+            debug!(
+                "Topic '{topic_instance}': {mesh_peer_count} mesh peers connected: {mesh_peers:?}"
+            );
             if mesh_peer_count < MIN_PEERS_FOR_MESH && !self.initial_peers_config.is_empty() {
                 warn!("Topic '{topic_instance}': Low number of mesh peers ({mesh_peer_count} < {MIN_PEERS_FOR_MESH}). Attempting to find more peers.");
                 self.reconnect_to_initial_peers().await;
@@ -731,10 +888,16 @@ impl P2PServer {
 
     async fn broadcast_block(&mut self, block: HyperBlock) -> Result<(), P2PError> {
         let topic = &self.topics[0];
-        let net_msg = NetworkMessage::new(NetworkMessageData::Block(block.clone()), &self.node_lattice_signing_key_bytes)?;
+        let net_msg = NetworkMessage::new(
+            NetworkMessageData::Block(block.clone()),
+            &self.node_lattice_signing_key_bytes,
+        )?;
         let msg_bytes = serde_json::to_vec(&net_msg)?;
 
-        self.swarm.behaviour_mut().gossipsub.publish(topic.clone(), msg_bytes)
+        self.swarm
+            .behaviour_mut()
+            .gossipsub
+            .publish(topic.clone(), msg_bytes)
             .map(|msg_id| {
                 MESSAGES_SENT.inc();
                 info!("Broadcasted block: {}, Message ID: {}", block.id, msg_id);
@@ -744,10 +907,16 @@ impl P2PServer {
 
     async fn broadcast_transaction(&mut self, tx: Transaction) -> Result<(), P2PError> {
         let topic = &self.topics[1];
-        let net_msg = NetworkMessage::new(NetworkMessageData::Transaction(tx.clone()), &self.node_lattice_signing_key_bytes)?;
+        let net_msg = NetworkMessage::new(
+            NetworkMessageData::Transaction(tx.clone()),
+            &self.node_lattice_signing_key_bytes,
+        )?;
         let msg_bytes = serde_json::to_vec(&net_msg)?;
 
-        self.swarm.behaviour_mut().gossipsub.publish(topic.clone(), msg_bytes)
+        self.swarm
+            .behaviour_mut()
+            .gossipsub
+            .publish(topic.clone(), msg_bytes)
             .map(|msg_id| {
                 MESSAGES_SENT.inc();
                 info!("Broadcasted transaction: {}, Message ID: {}", tx.id, msg_id);
@@ -757,10 +926,16 @@ impl P2PServer {
 
     async fn broadcast_state_request_message(&mut self) -> Result<(), P2PError> {
         let topic = &self.topics[2];
-        let net_msg = NetworkMessage::new(NetworkMessageData::StateRequest, &self.node_lattice_signing_key_bytes)?;
+        let net_msg = NetworkMessage::new(
+            NetworkMessageData::StateRequest,
+            &self.node_lattice_signing_key_bytes,
+        )?;
         let msg_bytes = serde_json::to_vec(&net_msg)?;
 
-        self.swarm.behaviour_mut().gossipsub.publish(topic.clone(), msg_bytes)
+        self.swarm
+            .behaviour_mut()
+            .gossipsub
+            .publish(topic.clone(), msg_bytes)
             .map(|msg_id| {
                 MESSAGES_SENT.inc();
                 info!("Broadcasted StateRequest message, Message ID: {msg_id}");
@@ -776,7 +951,11 @@ impl P2PServer {
             dag_guard.get_state_snapshot(0).await
         };
 
-        info!("Broadcasting own state data: {} blocks, {} UTXOs", blocks.len(), utxos_map.len());
+        info!(
+            "Broadcasting own state data: {} blocks, {} UTXOs",
+            blocks.len(),
+            utxos_map.len()
+        );
 
         let net_msg = NetworkMessage::new(
             NetworkMessageData::State(blocks, utxos_map),
@@ -784,10 +963,17 @@ impl P2PServer {
         )?;
         let msg_bytes = serde_json::to_vec(&net_msg)?;
 
-        self.swarm.behaviour_mut().gossipsub.publish(topic.clone(), msg_bytes.clone())
+        self.swarm
+            .behaviour_mut()
+            .gossipsub
+            .publish(topic.clone(), msg_bytes.clone())
             .map(|msg_id| {
                 MESSAGES_SENT.inc();
-                info!("Broadcasted own state data ({} bytes), Message ID: {}", msg_bytes.len(), msg_id);
+                info!(
+                    "Broadcasted own state data ({} bytes), Message ID: {}",
+                    msg_bytes.len(),
+                    msg_id
+                );
             })
             .map_err(P2PError::Broadcast)
     }

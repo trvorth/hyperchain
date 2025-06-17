@@ -54,8 +54,8 @@ impl Mempool {
     pub async fn add_transaction(
         &self,
         tx: Transaction,
-        utxos: &HashMap<String, UTXO>, 
-        dag: &HyperDAG,                
+        utxos: &HashMap<String, UTXO>,
+        dag: &HyperDAG,
     ) -> Result<(), MempoolError> {
         let mut transactions = self.transactions.write().await;
         let mut current_size_bytes_guard = self.current_size_bytes.write().await;
@@ -67,12 +67,15 @@ impl Mempool {
 
         let tx_size = serde_json::to_vec(&tx).unwrap_or_default().len();
         if *current_size_bytes_guard + tx_size > self.max_size_bytes && !transactions.is_empty() {
-            warn!("Mempool is full (max bytes reached, tx_size: {}, current_size: {}, max_size: {})", tx_size, *current_size_bytes_guard, self.max_size_bytes);
+            warn!(
+                "Mempool is full (max bytes reached, tx_size: {}, current_size: {}, max_size: {})",
+                tx_size, *current_size_bytes_guard, self.max_size_bytes
+            );
             return Err(MempoolError::MempoolFull);
         }
-        
-        let tx_id_for_log = tx.id.clone(); 
-        if transactions.insert(tx.id.clone(), tx).is_none() { 
+
+        let tx_id_for_log = tx.id.clone();
+        if transactions.insert(tx.id.clone(), tx).is_none() {
             *current_size_bytes_guard += tx_size;
             MEMPOOL_SIZE.set(*current_size_bytes_guard as f64);
             MEMPOOL_TRANSACTIONS.set(transactions.len() as f64);
@@ -103,13 +106,13 @@ impl Mempool {
             None
         }
     }
-    
+
     #[instrument]
     pub async fn prune_expired(&self) {
         let now_ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|_| MempoolError::TimestampError)
-            .unwrap_or_else(|_| Duration::from_secs(0)) 
+            .unwrap_or_else(|_| Duration::from_secs(0))
             .as_secs();
 
         let mut transactions_guard = self.transactions.write().await;
@@ -124,9 +127,9 @@ impl Mempool {
                 warn!("Pruning expired transaction: {}", tx.id);
                 bytes_removed += serde_json::to_vec(tx).unwrap_or_default().len();
                 expired_count += 1;
-                false 
+                false
             } else {
-                true 
+                true
             }
         });
 
@@ -142,8 +145,8 @@ impl Mempool {
     #[instrument]
     pub async fn select_transactions(
         &self,
-        _dag: &HyperDAG, 
-        _utxos: &HashMap<String, UTXO>, 
+        _dag: &HyperDAG,
+        _utxos: &HashMap<String, UTXO>,
         max_count: usize,
     ) -> Vec<Transaction> {
         let transactions_guard = self.transactions.read().await;
@@ -158,10 +161,15 @@ impl Mempool {
     pub async fn size(&self) -> usize {
         self.transactions.read().await.len()
     }
-    
+
     #[instrument]
     pub async fn total_fees(&self) -> u64 {
-        self.transactions.read().await.values().map(|tx| tx.fee).sum()
+        self.transactions
+            .read()
+            .await
+            .values()
+            .map(|tx| tx.fee)
+            .sum()
     }
 
     #[instrument]

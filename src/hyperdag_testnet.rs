@@ -1,13 +1,13 @@
+use anyhow::Result;
+use ed25519_dalek::SigningKey;
 use hyperdag::config::Config;
 use hyperdag::node::Node;
 use hyperdag::wallet::HyperWallet;
-use ed25519_dalek::SigningKey;
 use log::info;
 use rand::rngs::OsRng;
 use std::env;
-use std::sync::Arc;
-use anyhow::Result;
 use std::fs;
+use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -36,7 +36,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         mining_threads: 1,
         num_chains: 1,
         mining_chain_id: 0,
-        logging: hyperdag::config::LoggingConfig { level: "info".to_string() },
+        logging: hyperdag::config::LoggingConfig {
+            level: "info".to_string(),
+        },
         p2p: hyperdag::config::P2pConfig::default(),
     };
     config.validate()?;
@@ -49,7 +51,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Starting HyperDAG testnet node instance (from hyperdag_testnet.rs)...");
     let wallet_arc = Arc::new(wallet);
-    let node = Node::new(config, temp_config_path.clone(), wallet_arc, &temp_identity_path, temp_peer_cache_path.clone()).await?;
+    let node = Node::new(
+        config,
+        temp_config_path.clone(),
+        wallet_arc,
+        &temp_identity_path,
+        temp_peer_cache_path.clone(),
+    )
+    .await?;
 
     let node_start_result = node.start().await;
 
