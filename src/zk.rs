@@ -2,8 +2,7 @@
 use bellman::{Circuit, ConstraintSystem, LinearCombination, SynthesisError};
 #[cfg(feature = "zk")]
 use bls12_381::Scalar;
-#[cfg(feature = "zk")]
-use ff::Field;
+
 #[cfg(feature = "zk")]
 use sha2::{Digest, Sha256};
 #[cfg(feature = "zk")]
