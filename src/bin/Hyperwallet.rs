@@ -1,5 +1,5 @@
 use clap::{Args, Parser, Subcommand};
-use hyperdag::{
+use hyperchain::{
     hyperdag::HomomorphicEncrypted,
     transaction::{Input, Output, Transaction, TransactionConfig, DEV_ADDRESS, DEV_FEE_RATE, UTXO},
     wallet::HyperWallet,
@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+/// Main CLI structure, parsing subcommands and their arguments.
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
 #[clap(propagate_version = true)]
@@ -19,92 +20,99 @@ struct Cli {
     command: Commands,
 }
 
+/// Enumeration of all available wallet commands.
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Generate a new wallet and save it to a file
+    /// Generate a new wallet and save it to a file.
     Generate(GenerateArgs),
-    /// Show wallet details from a specific file
+    /// Show wallet details from a specific file.
     Show(ShowArgs),
-    /// Send a transaction from a specific wallet
+    /// Send a transaction from a specific wallet.
     Send(SendArgs),
-    /// Import a wallet from a private key and save it
+    /// Import a wallet from a private key and save it.
     Import(ImportArgs),
-    /// Import a wallet from a mnemonic phrase and save it
+    /// Import a wallet from a mnemonic phrase and save it.
     ImportMnemonic(ImportMnemonicArgs),
-    /// Check the balance of a specific wallet
+    /// Check the balance of a specific wallet.
     Balance(BalanceArgs),
 }
 
+/// Arguments for the `generate` command.
 #[derive(Args, Debug)]
 struct GenerateArgs {
-    /// Path to save the new wallet file
+    /// Path to save the new wallet file.
     #[arg(short, long, default_value = "wallet.key")]
     path: String,
-    /// Encrypt the wallet with a passphrase
+    /// Encrypt the wallet with a passphrase.
     #[arg(long)]
     passphrase: bool,
 }
 
+/// Arguments for the `show` command.
 #[derive(Args, Debug)]
 struct ShowArgs {
-    /// Path to the wallet file
+    /// Path to the wallet file.
     #[arg(short, long, default_value = "wallet.key")]
     path: String,
-    /// Use a passphrase to decrypt the wallet
+    /// Use a passphrase to decrypt the wallet.
     #[arg(long)]
     passphrase: bool,
 }
 
+/// Arguments for the `send` command.
 #[derive(Args, Debug)]
 struct SendArgs {
-    /// The recipient's 64-character hex address
+    /// The recipient's 64-character hex address.
     recipient: String,
-    /// The amount to send
+    /// The amount to send.
     amount: u64,
-    /// The API endpoint of the node
+    /// The API endpoint of the node.
     #[arg(short, long, default_value = "http://127.0.0.1:9071")]
     node: String,
-    /// Path to the sender's wallet file
+    /// Path to the sender's wallet file.
     #[arg(short, long, default_value = "wallet.key")]
     path: String,
-    /// Use a passphrase to decrypt the sender's wallet
+    /// Use a passphrase to decrypt the sender's wallet.
     #[arg(long)]
     passphrase: bool,
 }
 
+/// Arguments for the `import` command.
 #[derive(Args, Debug)]
 struct ImportArgs {
-    /// The private key to import
+    /// The private key to import.
     private_key: String,
-    /// Path to save the new wallet file
+    /// Path to save the new wallet file.
     #[arg(short, long, default_value = "wallet.key")]
     path: String,
-    /// Encrypt the new wallet with a passphrase
+    /// Encrypt the new wallet with a passphrase.
     #[arg(long)]
     passphrase: bool,
 }
 
+/// Arguments for the `import-mnemonic` command.
 #[derive(Args, Debug)]
 struct ImportMnemonicArgs {
-    /// The mnemonic phrase to import
+    /// The mnemonic phrase to import.
     mnemonic: String,
-    /// Path to save the new wallet file
+    /// Path to save the new wallet file.
     #[arg(short, long, default_value = "wallet.key")]
     path: String,
-    /// Encrypt the new wallet with a passphrase
+    /// Encrypt the new wallet with a passphrase.
     #[arg(long)]
     passphrase: bool,
 }
 
+/// Arguments for the `balance` command.
 #[derive(Args, Debug)]
 struct BalanceArgs {
-    /// The API endpoint of the node
+    /// The API endpoint of the node.
     #[arg(short, long, default_value = "http://127.0.0.1:9071")]
     node: String,
-    /// Path to the wallet file to check the balance of
+    /// Path to the wallet file to check the balance of.
     #[arg(short, long, default_value = "wallet.key")]
     path: String,
-    /// Use a passphrase to decrypt the wallet
+    /// Use a passphrase to decrypt the wallet.
     #[arg(long)]
     passphrase: bool,
 }

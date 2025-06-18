@@ -1,8 +1,8 @@
 use anyhow::Result;
 use ed25519_dalek::SigningKey;
-use hyperdag::config::Config;
-use hyperdag::node::Node;
-use hyperdag::wallet::HyperWallet;
+use hyperchain::config::Config;
+use hyperchain::node::Node;
+use hyperchain::wallet::HyperWallet;
 use log::info;
 use rand::rngs::OsRng;
 use std::env;
@@ -37,10 +37,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         mining_threads: 1,
         num_chains: 1,
         mining_chain_id: 0,
-        logging: hyperdag::config::LoggingConfig {
+        logging: hyperchain::config::LoggingConfig {
             level: "info".to_string(),
         },
-        p2p: hyperdag::config::P2pConfig::default(),
+        p2p: hyperchain::config::P2pConfig::default(),
     };
     config.validate()?;
 

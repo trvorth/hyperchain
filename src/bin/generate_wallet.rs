@@ -1,4 +1,4 @@
-use hyperdag::wallet::HyperWallet;
+use hyperchain::wallet::HyperWallet;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let wallet = HyperWallet::new()?;
