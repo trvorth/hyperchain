@@ -2,7 +2,7 @@ use crate::config::{Config, ConfigError};
 use crate::hyperdag::{HyperBlock, HyperDAG};
 use crate::mempool::Mempool;
 use crate::miner::{Miner, MinerConfig, MiningError};
-use crate::p2p::{P2PCommand, P2PConfig, P2PError, P2PServer};
+use crate::p2p::{P2PCommand, P2PError, P2PServer, P2PConfig};
 use crate::transaction::{Transaction, UTXO};
 use crate::wallet::HyperWallet;
 use anyhow;
@@ -263,14 +263,14 @@ impl Node {
         let p2p_initial_peers_config_clone = self.config.peers.clone();
         let node_signing_key_bytes_for_p2p = self.wallet.get_signing_key()?.to_bytes().to_vec();
         let peer_cache_path_clone = self.peer_cache_path.clone();
-
+        
         // FIX: The compiler is correct, network_id is not a field on Config.
         // It should be part of the P2pConfig. We will use a default for now.
         // TODO: Add network_id to the P2pConfig struct in config.rs and load it from config.toml
         let network_id_clone = "hyperdag_mainnet".to_string();
 
         let p2p_task_fut = async move {
-            let current_rx = rx_p2p_commands_for_p2p_task;
+            let mut current_rx = rx_p2p_commands_for_p2p_task;
             loop {
                 let p2p_config = P2PConfig {
                     topic_prefix: &network_id_clone,
