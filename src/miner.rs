@@ -45,7 +45,6 @@ pub struct MinerConfig {
     pub num_chains: u32,
 }
 
-
 #[derive(Clone, Debug)]
 pub struct Miner {
     address: String,
@@ -73,8 +72,10 @@ impl Miner {
             .into());
         }
 
-        let difficulty = u64::from_str_radix(config.difficulty_hex.trim_start_matches("0x"), 16)
-            .context(format!("Failed to parse difficulty hex: {}", config.difficulty_hex))?;
+        let difficulty =
+            u64::from_str_radix(config.difficulty_hex.trim_start_matches("0x"), 16).context(
+                format!("Failed to parse difficulty hex: {}", config.difficulty_hex),
+            )?;
 
         let mut effective_use_gpu = config.use_gpu;
         if config.use_gpu && !cfg!(feature = "gpu") {
@@ -156,7 +157,7 @@ impl Miner {
         let merkle_root = HyperBlock::compute_merkle_root(&transactions).map_err(|e| {
             MiningError::InvalidBlock(format!("Merkle root computation error: {e}"))
         })?;
-        
+
         let signing_key_placeholder = [0u8; 32];
 
         let mut initial_block_candidate = HyperBlock::new(
