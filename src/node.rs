@@ -1,8 +1,8 @@
 use crate::config::{Config, ConfigError};
 use crate::hyperdag::{HyperBlock, HyperDAG};
 use crate::mempool::Mempool;
-use crate::miner::{Miner, MinerConfig, MiningError}; // Import MinerConfig
-use crate::p2p::{P2PCommand, P2PError, P2PServer};
+use crate::miner::{Miner, MinerConfig, MiningError};
+use crate::p2p::{P2PCommand, P2PConfig, P2PError, P2PServer};
 use crate::transaction::{Transaction, UTXO};
 use crate::wallet::HyperWallet;
 use anyhow;
@@ -209,7 +209,6 @@ impl Node {
             }
         }
 
-        // FIX: Instantiate MinerConfig and pass it to Miner::new
         let miner_config = MinerConfig {
             address: wallet.get_address(),
             dag: dag.clone(),
@@ -265,12 +264,16 @@ impl Node {
         let node_signing_key_bytes_for_p2p = self.wallet.get_signing_key()?.to_bytes().to_vec();
         let peer_cache_path_clone = self.peer_cache_path.clone();
 
+        // FIX: The compiler is correct, network_id is not a field on Config.
+        // It should be part of the P2pConfig. We will use a default for now.
+        // TODO: Add network_id to the P2pConfig struct in config.rs and load it from config.toml
+        let network_id_clone = "hyperdag_mainnet".to_string();
+
         let p2p_task_fut = async move {
             let current_rx = rx_p2p_commands_for_p2p_task;
             loop {
-                // This call needs to be updated to use the P2PConfig struct
-                let p2p_config = crate::p2p::P2PConfig {
-                    topic_prefix: "hyperledger_node_internal",
+                let p2p_config = P2PConfig {
+                    topic_prefix: &network_id_clone,
                     listen_addresses: vec![p2p_listen_address_config_clone.clone()],
                     initial_peers: p2p_initial_peers_config_clone.clone(),
                     dag: p2p_dag_clone.clone(),
@@ -779,10 +782,9 @@ mod tests {
         let temp_identity_path = format!("./temp_p2p_identity_{}.key", rand_id);
         let temp_peer_cache_path = format!("./temp_peer_cache_{}.json", rand_id);
 
-        // Corrected: removed mut
         let test_config = Config {
             p2p_address: "/ip4/127.0.0.1/tcp/0".to_string(),
-            local_full_p2p_address: None, // This will be populated by Node::new
+            local_full_p2p_address: None,
             api_address: "127.0.0.1:0".to_string(),
             peers: vec![],
             genesis_validator: genesis_validator_addr.clone(),
@@ -804,7 +806,6 @@ mod tests {
             .save(&temp_config_path)
             .expect("Failed to save initial temp config for test");
 
-        // Node::new now takes the config object directly and its path
         let node_instance_result = Node::new(
             test_config,
             temp_config_path.clone(),
@@ -821,7 +822,6 @@ mod tests {
         );
         let node_instance = node_instance_result.unwrap();
 
-        // Check if the config file was updated by Node::new
         let updated_config =
             Config::load(&temp_config_path).expect("Failed to load updated temp config");
         assert!(updated_config.local_full_p2p_address.is_some());
@@ -857,7 +857,6 @@ mod tests {
         );
         assert_eq!(genesis_utxo_entry.tx_id, expected_genesis_tx_id);
 
-        // Cleanup the temporary config file
         let _ = std_fs::remove_file(&temp_config_path);
         let _ = std_fs::remove_file(&temp_identity_path);
         let _ = std_fs::remove_file(&temp_peer_cache_path);

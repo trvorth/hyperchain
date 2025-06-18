@@ -64,6 +64,19 @@ pub struct UTXO {
     pub explorer_link: String,
 }
 
+// Struct to hold configuration for a new Transaction
+#[derive(Debug)]
+pub struct TransactionConfig<'a> {
+    pub sender: String,
+    pub receiver: String,
+    pub amount: u64,
+    pub fee: u64,
+    pub inputs: Vec<Input>,
+    pub outputs: Vec<Output>,
+    pub signing_key_bytes: &'a [u8],
+    pub tx_timestamps: Arc<RwLock<HashMap<String, u64>>>,
+}
+
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct Transaction {
     pub id: String,
@@ -79,45 +92,47 @@ pub struct Transaction {
 }
 
 impl Transaction {
-    #[instrument]
-    pub async fn new(
-        sender: String,
-        receiver: String,
-        amount: u64,
-        fee: u64,
-        inputs: Vec<Input>,
-        outputs: Vec<Output>,
-        signing_key_bytes: &[u8],
-        tx_timestamps: Arc<RwLock<HashMap<String, u64>>>,
-    ) -> Result<Self, TransactionError> {
-        Self::validate_structure_pre_creation(&sender, &receiver, amount, &inputs)?;
-        Self::check_rate_limit(&tx_timestamps, MAX_TRANSACTIONS_PER_MINUTE).await?;
-        Self::validate_addresses(&sender, &receiver, &outputs)?;
+    #[instrument(skip(config))]
+    pub async fn new(config: TransactionConfig<'_>) -> Result<Self, TransactionError> {
+        Self::validate_structure_pre_creation(
+            &config.sender,
+            &config.receiver,
+            config.amount,
+            &config.inputs,
+        )?;
+        Self::check_rate_limit(&config.tx_timestamps, MAX_TRANSACTIONS_PER_MINUTE).await?;
+        Self::validate_addresses(&config.sender, &config.receiver, &config.outputs)?;
 
         let timestamp = Self::get_current_timestamp()?;
 
-        let lattice_signature_obj = LatticeSignature::new(signing_key_bytes);
+        let lattice_signature_obj = LatticeSignature::new(config.signing_key_bytes);
 
         let signature_data = Self::serialize_for_signing(
-            &sender, &receiver, amount, fee, &inputs, &outputs, timestamp,
+            &config.sender,
+            &config.receiver,
+            config.amount,
+            config.fee,
+            &config.inputs,
+            &config.outputs,
+            timestamp,
         )?;
         let signature = lattice_signature_obj.sign(&signature_data);
 
         let mut tx = Self {
             id: String::new(),
-            sender,
-            receiver,
-            amount,
-            fee,
-            inputs,
-            outputs,
+            sender: config.sender,
+            receiver: config.receiver,
+            amount: config.amount,
+            fee: config.fee,
+            inputs: config.inputs,
+            outputs: config.outputs,
             lattice_signature: signature,
             public_key: lattice_signature_obj.public_key.clone(),
             timestamp,
         };
         tx.id = tx.compute_hash();
 
-        let mut timestamps_guard = tx_timestamps.write().await;
+        let mut timestamps_guard = config.tx_timestamps.write().await;
         timestamps_guard.insert(tx.id.clone(), timestamp);
         if timestamps_guard.len() > (MAX_TRANSACTIONS_PER_MINUTE * 2) as usize {
             let current_time = Self::get_current_timestamp().unwrap_or(0);
@@ -453,17 +468,20 @@ mod tests {
         }
 
         let tx_timestamps_map = Arc::new(RwLock::new(HashMap::new()));
-        let tx = Transaction::new(
-            sender_address.clone(),
-            "0000000000000000000000000000000000000000000000000000000000000001".to_string(),
-            amount_to_receiver,
+
+        let tx_config = TransactionConfig {
+            sender: sender_address.clone(),
+            receiver: "0000000000000000000000000000000000000000000000000000000000000001"
+                .to_string(),
+            amount: amount_to_receiver,
             fee,
-            inputs_for_tx.clone(),
-            outputs_for_tx.clone(),
-            signing_key_bytes_slice,
-            tx_timestamps_map.clone(),
-        )
-        .await?;
+            inputs: inputs_for_tx.clone(),
+            outputs: outputs_for_tx.clone(),
+            signing_key_bytes: signing_key_bytes_slice,
+            tx_timestamps: tx_timestamps_map.clone(),
+        };
+
+        let tx = Transaction::new(tx_config).await?;
 
         let dag_signing_key_dalek_for_dag = wallet.get_signing_key()?;
         let dag_signing_key_bytes_slice: &[u8] = &dag_signing_key_dalek_for_dag.to_bytes();

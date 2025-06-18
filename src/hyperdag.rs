@@ -7,7 +7,7 @@ use lru::LruCache;
 use prometheus::{register_int_counter, IntCounter};
 use rand::Rng;
 use rayon::prelude::*;
-use rocksdb::{DB, Options};
+use rocksdb::{Options, DB};
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
 use std::collections::{HashMap, HashSet};
@@ -98,7 +98,6 @@ pub struct CrossChainSwapParams {
     pub responder: String,
     pub timelock_duration: u64,
 }
-
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct LatticeSignature {
@@ -441,7 +440,8 @@ impl HyperDAG {
         let mut opts = Options::default();
         opts.create_if_missing(true);
         let db = Arc::new(
-            DB::open(&opts, "hyperdag_db").map_err(|e| HyperDAGError::DatabaseError(e.to_string()))?,
+            DB::open(&opts, "hyperdag_db")
+                .map_err(|e| HyperDAGError::DatabaseError(e.to_string()))?,
         );
         let mut blocks_map = HashMap::new();
         let mut tips_map = HashMap::new();
@@ -560,9 +560,9 @@ impl HyperDAG {
         target_block_id: String,
     ) -> Result<(), HyperDAGError> {
         let mut swaps_guard = self.cross_chain_swaps.write().await;
-        let swap = swaps_guard
-            .get_mut(&swap_id)
-            .ok_or_else(|| HyperDAGError::CrossChainSwapError(format!("Swap ID {swap_id} not found")))?;
+        let swap = swaps_guard.get_mut(&swap_id).ok_or_else(|| {
+            HyperDAGError::CrossChainSwapError(format!("Swap ID {swap_id} not found"))
+        })?;
         if swap.state != SwapState::Initiated {
             return Err(HyperDAGError::CrossChainSwapError(format!(
                 "Swap {} is not in Initiated state, current state: {:?}",
@@ -575,7 +575,11 @@ impl HyperDAG {
     }
 
     #[instrument]
-    pub async fn deploy_smart_contract(&self, code: String, owner: String) -> Result<String, HyperDAGError> {
+    pub async fn deploy_smart_contract(
+        &self,
+        code: String,
+        owner: String,
+    ) -> Result<String, HyperDAGError> {
         let contract_id = hex::encode(Keccak256::digest(code.as_bytes()));
         let contract = SmartContract {
             contract_id: contract_id.clone(),
@@ -678,7 +682,7 @@ impl HyperDAG {
                 ),
             },
         ];
-        
+
         let reward_tx = Transaction {
             id: hex::encode(Keccak256::digest(
                 format!("coinbase_{now}_{chain_id_val}").as_bytes(),
@@ -737,8 +741,7 @@ impl HyperDAG {
 
         {
             let mut chain_loads_guard = self.chain_loads.write().await;
-            *chain_loads_guard.entry(chain_id_val).or_insert(0) +=
-                block.transactions.len() as u64;
+            *chain_loads_guard.entry(chain_id_val).or_insert(0) += block.transactions.len() as u64;
         }
         Ok(block)
     }
@@ -750,8 +753,7 @@ impl HyperDAG {
         utxos_arc: &Arc<RwLock<HashMap<String, crate::transaction::UTXO>>>,
     ) -> Result<bool, HyperDAGError> {
         let serialized_size = serde_json::to_vec(&block)?.len();
-        if block.transactions.len() > MAX_TRANSACTIONS_PER_BLOCK
-            || serialized_size > MAX_BLOCK_SIZE
+        if block.transactions.len() > MAX_TRANSACTIONS_PER_BLOCK || serialized_size > MAX_BLOCK_SIZE
         {
             return Err(HyperDAGError::InvalidBlock(format!(
                 "Block exceeds size limits: {} txns, {} bytes",
@@ -801,9 +803,7 @@ impl HyperDAG {
         let anomaly_score = self.detect_anomaly(block).await?;
         if anomaly_score > 0.7 {
             let mut anomaly_history_guard = self.anomaly_history.write().await;
-            let count = anomaly_history_guard
-                .entry(block.id.clone())
-                .or_insert(0);
+            let count = anomaly_history_guard.entry(block.id.clone()).or_insert(0);
             *count += 1;
             if *count > 3 {
                 ANOMALIES_DETECTED.inc();
@@ -829,7 +829,9 @@ impl HyperDAG {
             if !block.parents.is_empty() {
                 for parent_id_val in &block.parents {
                     let parent_block = blocks_guard.get(parent_id_val).ok_or_else(|| {
-                        HyperDAGError::InvalidParent(format!("Parent block {parent_id_val} not found"))
+                        HyperDAGError::InvalidParent(format!(
+                            "Parent block {parent_id_val} not found"
+                        ))
                     })?;
                     if parent_block.chain_id != block.chain_id {
                         return Err(HyperDAGError::InvalidParent(format!(
@@ -933,10 +935,13 @@ impl HyperDAG {
             let dev_fee_expected = (expected_reward as f64 * DEV_FEE_RATE) as u64;
             let total_output_amount: u64 = tx.outputs.iter().map(|o_val| o_val.amount).sum();
 
-            !tx.outputs.is_empty() &&
-            tx.outputs.iter().any(|o_val| o_val.address == DEV_ADDRESS && o_val.amount == dev_fee_expected) &&
-            total_output_amount == expected_reward &&
-            tx.fee == 0
+            !tx.outputs.is_empty()
+                && tx
+                    .outputs
+                    .iter()
+                    .any(|o_val| o_val.address == DEV_ADDRESS && o_val.amount == dev_fee_expected)
+                && total_output_amount == expected_reward
+                && tx.fee == 0
         } else {
             let dag_arc = Arc::new(RwLock::new(self.clone()));
             let utxos_arc_val = Arc::new(RwLock::new(utxos_map.clone()));
@@ -1022,9 +1027,7 @@ impl HyperDAG {
                             amount: output_val.amount,
                             tx_id: tx_val.id.clone(),
                             output_index: index as u32,
-                            explorer_link: format!(
-                                "https://hyperblockexplorer.org/utxo/{utxo_id}"
-                            ),
+                            explorer_link: format!("https://hyperblockexplorer.org/utxo/{utxo_id}"),
                         },
                     );
                 }
@@ -1182,11 +1185,12 @@ impl HyperDAG {
                         current_id_val = block_val.parents[0].clone();
                     }
 
-                    let last_block_in_path_id =
-                        path_to_finalize.last().cloned().unwrap_or_else(|| tip_id_val.clone());
-                    let last_block_is_finalizable = blocks_guard
-                        .get(&last_block_in_path_id)
-                        .is_some_and(|b| {
+                    let last_block_in_path_id = path_to_finalize
+                        .last()
+                        .cloned()
+                        .unwrap_or_else(|| tip_id_val.clone());
+                    let last_block_is_finalizable =
+                        blocks_guard.get(&last_block_in_path_id).is_some_and(|b| {
                             (now.saturating_sub(b.timestamp) > 86400) || b.parents.is_empty()
                         });
 
@@ -1274,9 +1278,7 @@ impl HyperDAG {
                     .get_mut(&new_chain_id_val)
                     .unwrap()
                     .insert(new_genesis_id);
-                info!(
-                    "Created new shard {new_chain_id_val} with initial load {load_val}"
-                );
+                info!("Created new shard {new_chain_id_val} with initial load {load_val}");
             }
             info!("Total new shards created: {new_shards_created_count}. Total chains now: {num_chains_current_val}");
         }
@@ -1329,9 +1331,9 @@ impl HyperDAG {
         let total_stake_val: u64;
         {
             let validators_guard = self.validators.read().await;
-            stake_val = *validators_guard
-                .get(&voter)
-                .ok_or_else(|| HyperDAGError::Governance("Voter not found or no stake".to_string()))?;
+            stake_val = *validators_guard.get(&voter).ok_or_else(|| {
+                HyperDAGError::Governance("Voter not found or no stake".to_string())
+            })?;
             total_stake_val = validators_guard.values().sum();
         }
 
@@ -1407,7 +1409,9 @@ impl HyperDAG {
             if validator_keys.is_empty() {
                 return None;
             }
-            return Some(validator_keys[rand::thread_rng().gen_range(0..validator_keys.len())].clone());
+            return Some(
+                validator_keys[rand::thread_rng().gen_range(0..validator_keys.len())].clone(),
+            );
         }
 
         let mut rand_num = rand::thread_rng().gen_range(0..total_stake_val);

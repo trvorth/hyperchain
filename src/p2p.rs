@@ -199,7 +199,6 @@ pub struct GossipMessageContext {
     pub rate_limiter_block: Arc<KeyedPeerRateLimiter>,
     pub rate_limiter_tx: Arc<KeyedPeerRateLimiter>,
     pub rate_limiter_state: Arc<KeyedPeerRateLimiter>,
-    pub local_node_public_lattice_key_bytes: Vec<u8>,
     pub dag: Arc<RwLock<HyperDAG>>,
     pub mempool: Arc<RwLock<Mempool>>,
     pub utxos: Arc<RwLock<HashMap<String, UTXO>>>,
@@ -280,7 +279,8 @@ impl P2PServer {
             }
         }
 
-        let topics = Self::subscribe_to_topics(config.topic_prefix, &mut swarm.behaviour_mut().gossipsub)?;
+        let topics =
+            Self::subscribe_to_topics(config.topic_prefix, &mut swarm.behaviour_mut().gossipsub)?;
 
         Self::listen_on_addresses(&mut swarm, &config.listen_addresses, &local_peer_id)?;
         if !config.initial_peers.is_empty() {
@@ -480,7 +480,6 @@ impl P2PServer {
                         rate_limiter_block: self.rate_limiter_block.clone(),
                         rate_limiter_tx: self.rate_limiter_tx.clone(),
                         rate_limiter_state: self.rate_limiter_state.clone(),
-                        local_node_public_lattice_key_bytes: self.node_lattice_signing_key_bytes.clone(),
                         dag: self.dag.clone(),
                         mempool: self.mempool.clone(),
                         utxos: self.utxos.clone(),
@@ -653,10 +652,24 @@ impl P2PServer {
         info!("Processing verified (HMAC) message data from {source} on topic {topic_str}");
         match msg_payload.data {
             NetworkMessageData::Block(block) => {
-                P2PServer::static_process_block(block, source, context.dag, context.utxos, context.proposals).await
+                P2PServer::static_process_block(
+                    block,
+                    source,
+                    context.dag,
+                    context.utxos,
+                    context.proposals,
+                )
+                .await
             }
             NetworkMessageData::Transaction(tx) => {
-                P2PServer::static_process_transaction(tx, source, context.mempool, context.dag, context.utxos).await
+                P2PServer::static_process_transaction(
+                    tx,
+                    source,
+                    context.mempool,
+                    context.dag,
+                    context.utxos,
+                )
+                .await
             }
             NetworkMessageData::State(blocks_map, new_utxos_map) => {
                 P2PServer::static_process_state_sync_data(

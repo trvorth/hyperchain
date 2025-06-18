@@ -1,7 +1,7 @@
 use clap::{Args, Parser, Subcommand};
 use hyperdag::{
     hyperdag::HomomorphicEncrypted,
-    transaction::{Input, Output, Transaction, DEV_ADDRESS, DEV_FEE_RATE, UTXO},
+    transaction::{Input, Output, Transaction, TransactionConfig, DEV_ADDRESS, DEV_FEE_RATE, UTXO},
     wallet::HyperWallet,
 };
 use log::info;
@@ -220,17 +220,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 });
             }
 
-            let tx = Transaction::new(
-                sender_address,
-                args.recipient.clone(),
-                args.amount,
+            let tx_timestamps = Arc::new(RwLock::new(HashMap::new()));
+            let tx_config = TransactionConfig {
+                sender: sender_address,
+                receiver: args.recipient.clone(),
+                amount: args.amount,
                 fee,
-                inputs_for_tx,
-                outputs_for_tx,
-                &signing_key_bytes,
-                Arc::new(RwLock::new(HashMap::new())),
-            )
-            .await?;
+                inputs: inputs_for_tx,
+                outputs: outputs_for_tx,
+                signing_key_bytes: &signing_key_bytes,
+                tx_timestamps,
+            };
+            let tx = Transaction::new(tx_config).await?;
 
             let api_url = format!("{}/transaction", &args.node);
             let res = client.post(&api_url).json(&tx).send().await?;
