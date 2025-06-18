@@ -1,7 +1,7 @@
 use hex;
 use libp2p::Multiaddr;
 use serde::{Deserialize, Serialize};
-use std::fs::{self, File}; // Added File import
+use std::fs::{self, File};
 use std::io::Write;
 use thiserror::Error;
 
@@ -31,6 +31,7 @@ pub struct Config {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub local_full_p2p_address: Option<String>,
     pub api_address: String,
+    pub network_id: String,
     pub peers: Vec<String>,
     pub genesis_validator: String,
     pub target_block_time: u64,
@@ -105,6 +106,7 @@ impl Config {
             local_full_p2p_address: None,
             api_address: std::env::var("API_ADDRESS")
                 .unwrap_or_else(|_| "0.0.0.0:9000".to_string()),
+            network_id: "hyperdag-mainnet".to_string(),
             peers: std::env::var("PEERS")
                 .unwrap_or_else(|_| "".to_string())
                 .split(',')
@@ -161,7 +163,7 @@ impl Config {
 
     pub fn save(&self, path: &str) -> Result<(), ConfigError> {
         let toml_string = toml::to_string_pretty(self).map_err(ConfigError::TomlSer)?;
-        let mut file = File::create(path)?; // Corrected: std::fs::File
+        let mut file = File::create(path)?;
         file.write_all(toml_string.as_bytes())?;
         Ok(())
     }
@@ -243,6 +245,11 @@ impl Config {
         if self.p2p.heartbeat_interval < 100 {
             return Err(ConfigError::InvalidParameter(
                 "P2P heartbeat interval must be at least 100ms".to_string(),
+            ));
+        }
+        if self.network_id.is_empty() {
+            return Err(ConfigError::Validation(
+                "network_id cannot be empty".to_string(),
             ));
         }
         Ok(())

@@ -263,11 +263,7 @@ impl Node {
         let p2p_initial_peers_config_clone = self.config.peers.clone();
         let node_signing_key_bytes_for_p2p = self.wallet.get_signing_key()?.to_bytes().to_vec();
         let peer_cache_path_clone = self.peer_cache_path.clone();
-        
-        // FIX: The compiler is correct, network_id is not a field on Config.
-        // It should be part of the P2pConfig. We will use a default for now.
-        // TODO: Add network_id to the P2pConfig struct in config.rs and load it from config.toml
-        let network_id_clone = "hyperdag_mainnet".to_string();
+        let network_id_clone = self.config.network_id.clone();
 
         let p2p_task_fut = async move {
             let mut current_rx = rx_p2p_commands_for_p2p_task;
@@ -800,6 +796,7 @@ mod tests {
                 level: "debug".to_string(),
             },
             p2p: P2pConfig::default(),
+            network_id: "testnet".to_string(),
         };
 
         test_config

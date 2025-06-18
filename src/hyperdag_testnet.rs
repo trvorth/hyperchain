@@ -26,6 +26,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         p2p_address: "/ip4/127.0.0.1/tcp/0".to_string(),
         local_full_p2p_address: None,
         api_address: "127.0.0.1:0".to_string(),
+        network_id: "hyperdag-testnet".to_string(), // Added network_id
         peers: vec![],
         genesis_validator: wallet.get_address(),
         target_block_time: 60,
