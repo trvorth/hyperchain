@@ -1,110 +1,142 @@
 use anyhow::{Context, Result};
+use chrono::Local;
 use clap::Parser;
-use hyperdag::{config::Config, node::Node, wallet::HyperWallet};
+use dotenvy::dotenv;
+use hyperchain::{config::Config, node::Node, wallet::HyperWallet};
 use log::{error, info, warn};
-use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
-use std::fs;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::signal;
 
+/// Command-line arguments for the Hyperchain node.
 #[derive(Parser, Debug)]
-#[clap(author, version, about = "HyperDAG Test Node 3")]
+#[clap(author, version, about, long_about = None)]
 struct Args {
-    #[clap(long, default_value = "./node3/node3_config.toml")]
-    config_path: PathBuf,
+    /// Path to the configuration file.
+    #[clap(long, default_value = "config.toml")]
+    config_path: String,
+    /// A prefix for log messages, useful for distinguishing nodes in a testnet.
+    #[clap(long)]
+    node_log_prefix: Option<String>,
 }
 
-// A simple struct to hold our cached peers
-#[derive(Serialize, Deserialize, Debug, Default)]
-struct PeerCache {
-    peers: Vec<String>,
-}
-
+/// The main asynchronous function that sets up and runs the node.
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Load environment variables from a .env file if it exists.
+    dotenv().ok();
+
+    // Parse command-line arguments.
     let args = Args::parse();
-    let log_prefix = "[Node 3]";
+    let log_prefix: String = args
+        .node_log_prefix
+        .map_or_else(String::new, |p| format!("[{p}] "));
+    let log_prefix_for_format = log_prefix.clone();
 
-    // --- Path Definitions ---
-    let config_path = &args.config_path;
-    let identity_key_path = "./node3/p2p_identity.key";
-    let wallet_path = "./node3/node3_wallet.key";
-    let peer_cache_path = "./node3/peer_cache.json";
-
-    // --- Config Loading ---
-    let mut config = Config::load(config_path.to_str().unwrap()).context(format!(
-        "{log_prefix} Failed to load config from {config_path:?}"
+    // Load the node configuration from the specified path.
+    let initial_config = Config::load(&args.config_path).context(format!(
+        "{}Failed to load config from {}",
+        log_prefix, args.config_path
     ))?;
 
-    // --- Logger Initialization ---
+    // Set up the logger with directives from the config file.
     let log_directives = format!(
-        "{},libp2p=info,libp2p_kad=info", // Adjusted for less noise, can be set to debug
-        &config.logging.level
+        "{},libp2p_swarm=debug,libp2p_noise=trace,libp2p_mdns=debug",
+        &initial_config.logging.level
     );
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(&log_directives))
-        .format_target(false)
-        .format_timestamp_micros()
+        .format(move |buf, record| {
+            use std::io::Write;
+            writeln!(
+                buf,
+                "{} {} {} {} {}:{} {}",
+                chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
+                record.level(),
+                record.target(),
+                log_prefix_for_format,
+                record.file().unwrap_or("unknown"),
+                record.line().unwrap_or(0),
+                record.args()
+            )
+        })
         .try_init()
-        .ok();
+        .context(format!("{log_prefix}Failed to initialize logger"))?;
 
-    info!("{log_prefix} Starting HyperDAG Node...");
+    info!("{}Starting HyperDAG node at {:?}", log_prefix, Local::now());
+    info!("{}Config loaded from: \"{}\"", log_prefix, args.config_path);
 
-    // --- UPGRADE: Load cached peers ---
-    let cached_peers: Vec<String> = fs::read_to_string(peer_cache_path)
-        .ok()
-        .and_then(|contents| serde_json::from_str::<PeerCache>(&contents).ok())
-        .map_or_else(Vec::new, |cache| cache.peers);
+    // Validate the loaded configuration.
+    initial_config
+        .validate()
+        .context(format!("{log_prefix}Config validation failed"))?;
 
-    if !cached_peers.is_empty() {
-        info!(
-            "{} Loaded {} peers from cache file.",
-            log_prefix,
-            cached_peers.len()
-        );
-        // Combine and deduplicate peers from config and cache
-        let mut all_peers = HashSet::new();
-        all_peers.extend(config.peers.iter().cloned());
-        all_peers.extend(cached_peers.into_iter());
-        config.peers = all_peers.into_iter().collect();
-    }
-
-    // --- Wallet Loading/Generation ---
-    if let Some(parent_dir) = PathBuf::from(wallet_path).parent() {
-        fs::create_dir_all(parent_dir)?;
-    }
-    let validator_wallet = match HyperWallet::from_file(wallet_path, None) {
-        Ok(wallet) => wallet,
-        Err(_) => {
-            warn!("{log_prefix} Wallet not found at {wallet_path}. Ensure it has been copied from the root wallet.key.");
-            return Err(anyhow::anyhow!("Wallet file not found at {}", wallet_path));
+    // Load or generate the validator's wallet.
+    let wallet_file_name = "wallet.key";
+    let validator_wallet = match HyperWallet::from_file(wallet_file_name, None) {
+        Ok(wallet) => {
+            info!(
+                "{}Loaded wallet from {} with address: {}",
+                log_prefix,
+                wallet_file_name,
+                wallet.get_address()
+            );
+            wallet
+        }
+        Err(e) => {
+            warn!("{log_prefix}Failed to load or parse {wallet_file_name}: {e}. Generating new wallet.");
+            let new_wallet =
+                HyperWallet::new().context(format!("{log_prefix}Failed to generate new wallet"))?;
+            new_wallet
+                .save_to_file(wallet_file_name, None)
+                .context(format!(
+                    "{log_prefix}Failed to save new wallet to {wallet_file_name}"
+                ))?;
+            info!(
+                "{}Generated new wallet with address: {}. Update config.toml with this genesis_validator if needed.",
+                log_prefix, new_wallet.get_address()
+            );
+            new_wallet
         }
     };
+
     let wallet_arc = Arc::new(validator_wallet);
 
-    // --- Node Initialization ---
+    info!("{log_prefix}Initializing and starting Node instance...");
+
+    // Initialize the Node with its configuration, wallet, and key/cache paths.
+    let identity_key_path = "p2p_identity.key";
+    let peer_cache_path = "peer_cache.json".to_string();
     let node_instance = Node::new(
-        config,
-        config_path.to_str().unwrap().to_string(),
+        initial_config,
+        args.config_path.clone(),
         wallet_arc,
         identity_key_path,
-        peer_cache_path.to_string(), // Pass the cache path to the node
+        peer_cache_path,
     )
     .await?;
 
-    // --- Start and Shutdown Logic ---
+    // Spawn the main node task.
     let node_handle = tokio::spawn(async move {
         if let Err(e) = node_instance.start().await {
-            error!("[Node 3] Node task failed: {e}");
+            error!("Node main task execution failed: {e}");
+        } else {
+            info!("Node main task completed.");
         }
     });
 
-    info!("{log_prefix} Node started. Waiting for Ctrl+C.");
+    info!("{log_prefix}Node tasks started. Main thread will wait for Ctrl+C.");
+
+    // Wait for a Ctrl+C signal to initiate shutdown.
     signal::ctrl_c().await?;
-    info!("{log_prefix} Shutting down.");
+    info!("{log_prefix}Received Ctrl+C. Shutting down.");
+
+    // Abort the node task and wait for it to finish.
     node_handle.abort();
-    let _ = node_handle.await;
-    info!("{log_prefix} Shutdown complete.");
+    if let Err(e) = node_handle.await {
+        if !e.is_cancelled() {
+            error!("{log_prefix}Node task join error: {e:?}");
+        }
+    }
+
+    info!("{log_prefix}Shutdown complete.");
     Ok(())
 }
