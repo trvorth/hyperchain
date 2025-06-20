@@ -763,11 +763,18 @@ mod tests {
     use super::*;
     use crate::config::{Config, LoggingConfig, P2pConfig};
     use rand::Rng;
+    use serial_test::serial; // Added
     use std::fs as std_fs;
     use std::sync::Arc;
 
     #[tokio::test]
+    #[serial] // Added to ensure serial execution
     async fn test_node_creation_and_config_save() {
+        // Clean up the database directory before the test
+        if std::path::Path::new("hyperdag_db").exists() {
+            std::fs::remove_dir_all("hyperdag_db").unwrap();
+        }
+
         let _ = env_logger::try_init();
         let wallet = HyperWallet::new().expect("Failed to create new wallet for test");
         let wallet_arc = Arc::new(wallet);
