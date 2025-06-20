@@ -399,10 +399,17 @@ mod tests {
     use super::*;
     use crate::hyperdag::HyperDAG;
     use crate::wallet::HyperWallet;
+    use serial_test::serial; // Added
 
     #[tokio::test]
+    #[serial] // Added to ensure serial execution
     async fn test_transaction_creation_and_verification() -> Result<(), Box<dyn std::error::Error>>
     {
+        // Clean up the database directory before the test to ensure a clean state
+        if std::path::Path::new("hyperdag_db").exists() {
+            std::fs::remove_dir_all("hyperdag_db")?;
+        }
+
         let wallet = Arc::new(HyperWallet::new()?);
 
         let signing_key_dalek = wallet.get_signing_key()?;
