@@ -547,7 +547,7 @@ impl Node {
 async fn rate_limit_layer(
     MiddlewareState(limiter): MiddlewareState<Arc<DirectApiRateLimiter>>,
     req: HttpRequest<Body>,
-    next: Next,
+    next: Next<Body>,
     route_name: &str,
 ) -> Result<axum::response::Response, StatusCode> {
     if limiter.check().is_err() {
