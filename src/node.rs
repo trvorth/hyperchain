@@ -4,7 +4,7 @@ use crate::mempool::Mempool;
 use crate::miner::{Miner, MinerConfig, MiningError};
 use crate::p2p::{P2PCommand, P2PConfig, P2PError, P2PServer};
 use crate::transaction::{Transaction, UTXO};
-use crate::wallet::HyperWallet;
+use crate::wallet::Wallet;
 use anyhow;
 use axum::{
     body::Body,
@@ -14,8 +14,6 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use backoff::future::retry;
-use backoff::{Error as BackoffError, ExponentialBackoff};
 use governor::clock::QuantaClock;
 use governor::state::{InMemoryState, NotKeyed};
 use governor::{Quota, RateLimiter};
@@ -103,7 +101,7 @@ pub struct Node {
     p2p_identity_keypair: identity::Keypair,
     pub dag: Arc<RwLock<HyperDAG>>,
     pub miner: Arc<Miner>,
-    wallet: Arc<HyperWallet>,
+    wallet: Arc<Wallet>,
     pub mempool: Arc<RwLock<Mempool>>,
     pub utxos: Arc<RwLock<HashMap<String, UTXO>>>,
     pub proposals: Arc<RwLock<Vec<HyperBlock>>>,
@@ -118,7 +116,7 @@ impl Node {
     pub async fn new(
         mut config: Config,
         config_path: String,
-        wallet: Arc<HyperWallet>,
+        wallet: Arc<Wallet>,
         p2p_identity_path: &str,
         peer_cache_path: String,
     ) -> Result<Self, NodeError> {
@@ -164,7 +162,7 @@ impl Node {
             config.save(&config_path)?;
         }
 
-        let initial_validator = wallet.get_address().trim().to_lowercase();
+        let initial_validator = wallet.address().trim().to_lowercase();
         if initial_validator != config.genesis_validator.trim().to_lowercase() {
             return Err(NodeError::Config(ConfigError::Validation(
                 "Wallet address does not match genesis validator".to_string(),
@@ -210,7 +208,7 @@ impl Node {
         }
 
         let miner_config = MinerConfig {
-            address: wallet.get_address(),
+            address: wallet.address(),
             dag: dag.clone(),
             mempool: mempool.clone(),
             difficulty_hex: format!("{:x}", config.difficulty),
@@ -325,7 +323,7 @@ impl Node {
                     match miner_clone.mine(&utxos_clone_miner).await {
                         Ok(Some(block)) => {
                             info!("Block mined: hash={}", block.id);
-                            let wallet_address = wallet_clone_miner.get_address();
+                            let wallet_address = wallet_clone_miner.address();
                             let balance = {
                                 let utxos_read_guard = utxos_clone_miner.read().await;
                                 utxos_read_guard
@@ -434,10 +432,6 @@ impl Node {
                 api_address: self.config.api_address.clone(),
             };
             async move {
-                let backoff = ExponentialBackoff {
-                    max_elapsed_time: Some(Duration::from_secs(30)),
-                    ..Default::default()
-                };
                 let rate_limiter_info: Arc<DirectApiRateLimiter> =
                     Arc::new(RateLimiter::direct(Quota::per_second(nonzero!(20u32))));
                 let rate_limiter_balance: Arc<DirectApiRateLimiter> =
@@ -469,35 +463,19 @@ impl Node {
                     ))
                     .with_state(app_state.clone());
 
-                match retry(backoff, || async {
-                    let addr: SocketAddr = app_state.api_address.parse().map_err(|e| {
-                        BackoffError::Permanent(NodeError::Config(ConfigError::Validation(
-                            format!("Invalid API address: {e}"),
-                        )))
-                    })?;
-                    info!("API server starting on {addr}");
-                    axum_server::bind(addr)
-                        .serve(app.clone().into_make_service())
-                        .await
-                        .map_err(|e| BackoffError::Transient {
-                            err: NodeError::ServerExecution(format!("API server failed: {e}")),
-                            retry_after: None,
-                        })?;
-                    Ok(())
-                })
-                .await
-                {
-                    Ok(_) => {
-                        info!("API server task completed (this is unexpected for an indefinite server).");
-                        Ok(())
-                    }
-                    Err(e) => match e {
-                        BackoffError::Permanent(ne) | BackoffError::Transient { err: ne, .. } => {
-                            error!("API server failed permanently after retries: {ne:?}");
-                            Err(ne)
-                        }
-                    },
+                let addr: SocketAddr = app_state.api_address.parse().map_err(|e| {
+                    NodeError::Config(ConfigError::Validation(format!("Invalid API address: {e}")))
+                })?;
+                info!("API server starting on {addr}");
+
+                if let Err(e) = axum_server::bind(addr).serve(app.into_make_service()).await {
+                    error!("API server failed: {e}");
+                    return Err(NodeError::ServerExecution(format!(
+                        "API server failed: {e}"
+                    )));
                 }
+
+                Ok(())
             }
         };
 
@@ -763,22 +741,21 @@ mod tests {
     use super::*;
     use crate::config::{Config, LoggingConfig, P2pConfig};
     use rand::Rng;
-    use serial_test::serial; // Added
+    use serial_test::serial;
     use std::fs as std_fs;
     use std::sync::Arc;
 
     #[tokio::test]
-    #[serial] // Added to ensure serial execution
+    #[serial]
     async fn test_node_creation_and_config_save() {
-        // Clean up the database directory before the test
         if std::path::Path::new("hyperdag_db").exists() {
             std::fs::remove_dir_all("hyperdag_db").unwrap();
         }
 
         let _ = env_logger::try_init();
-        let wallet = HyperWallet::new().expect("Failed to create new wallet for test");
+        let wallet = Wallet::new().expect("Failed to create new wallet for test");
         let wallet_arc = Arc::new(wallet);
-        let genesis_validator_addr = wallet_arc.get_address();
+        let genesis_validator_addr = wallet_arc.address();
 
         let rand_id: u32 = rand::thread_rng().gen();
         let temp_config_path = format!("./temp_test_node_config_{}.toml", rand_id);

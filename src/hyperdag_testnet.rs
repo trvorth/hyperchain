@@ -2,7 +2,7 @@ use anyhow::Result;
 use ed25519_dalek::SigningKey;
 use hyperchain::config::Config;
 use hyperchain::node::Node;
-use hyperchain::wallet::HyperWallet;
+use hyperchain::wallet::Wallet;
 use log::info;
 use rand::rngs::OsRng;
 use std::env;
@@ -19,16 +19,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let signing_key = SigningKey::generate(&mut os_rng);
         hex::encode(signing_key.to_bytes())
     });
-    let wallet = HyperWallet::from_private_key(&private_key_hex)?;
-    info!("Testnet node wallet address: {}", wallet.get_address());
+    let wallet = Wallet::from_private_key(&private_key_hex)?; // MODIFIED: Corrected struct name
+    info!("Testnet node wallet address: {}", wallet.address()); // MODIFIED: Corrected method name
 
     let config = Config {
         p2p_address: "/ip4/127.0.0.1/tcp/0".to_string(),
         local_full_p2p_address: None,
         api_address: "127.0.0.1:0".to_string(),
-        network_id: "hyperdag-testnet".to_string(), // Added network_id
+        network_id: "hyperdag-testnet".to_string(),
         peers: vec![],
-        genesis_validator: wallet.get_address(),
+        genesis_validator: wallet.address(), // MODIFIED: Corrected method name
         target_block_time: 60,
         difficulty: 10,
         max_amount: 10_000_000_000,

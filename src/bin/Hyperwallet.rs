@@ -2,16 +2,16 @@ use clap::{Args, Parser, Subcommand};
 use hyperchain::{
     hyperdag::HomomorphicEncrypted,
     transaction::{Input, Output, Transaction, TransactionConfig, DEV_ADDRESS, DEV_FEE_RATE, UTXO},
-    wallet::HyperWallet,
+    wallet::Wallet,
 };
 use log::info;
 use reqwest::Client;
 use rpassword::prompt_password;
+use secrecy::{ExposeSecret, SecretString};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-/// Main CLI structure, parsing subcommands and their arguments.
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
 #[clap(propagate_version = true)]
@@ -20,101 +20,58 @@ struct Cli {
     command: Commands,
 }
 
-/// Enumeration of all available wallet commands.
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Generate a new wallet and save it to a file.
     Generate(GenerateArgs),
-    /// Show wallet details from a specific file.
     Show(ShowArgs),
-    /// Send a transaction from a specific wallet.
     Send(SendArgs),
-    /// Import a wallet from a private key and save it.
     Import(ImportArgs),
-    /// Import a wallet from a mnemonic phrase and save it.
     ImportMnemonic(ImportMnemonicArgs),
-    /// Check the balance of a specific wallet.
     Balance(BalanceArgs),
 }
 
-/// Arguments for the `generate` command.
 #[derive(Args, Debug)]
 struct GenerateArgs {
-    /// Path to save the new wallet file.
     #[arg(short, long, default_value = "wallet.key")]
     path: String,
-    /// Encrypt the wallet with a passphrase.
-    #[arg(long)]
-    passphrase: bool,
 }
 
-/// Arguments for the `show` command.
 #[derive(Args, Debug)]
 struct ShowArgs {
-    /// Path to the wallet file.
     #[arg(short, long, default_value = "wallet.key")]
     path: String,
-    /// Use a passphrase to decrypt the wallet.
-    #[arg(long)]
-    passphrase: bool,
 }
 
-/// Arguments for the `send` command.
 #[derive(Args, Debug)]
 struct SendArgs {
-    /// The recipient's 64-character hex address.
     recipient: String,
-    /// The amount to send.
     amount: u64,
-    /// The API endpoint of the node.
     #[arg(short, long, default_value = "http://127.0.0.1:9071")]
     node: String,
-    /// Path to the sender's wallet file.
     #[arg(short, long, default_value = "wallet.key")]
     path: String,
-    /// Use a passphrase to decrypt the sender's wallet.
-    #[arg(long)]
-    passphrase: bool,
 }
 
-/// Arguments for the `import` command.
 #[derive(Args, Debug)]
 struct ImportArgs {
-    /// The private key to import.
     private_key: String,
-    /// Path to save the new wallet file.
     #[arg(short, long, default_value = "wallet.key")]
     path: String,
-    /// Encrypt the new wallet with a passphrase.
-    #[arg(long)]
-    passphrase: bool,
 }
 
-/// Arguments for the `import-mnemonic` command.
 #[derive(Args, Debug)]
 struct ImportMnemonicArgs {
-    /// The mnemonic phrase to import.
     mnemonic: String,
-    /// Path to save the new wallet file.
     #[arg(short, long, default_value = "wallet.key")]
     path: String,
-    /// Encrypt the new wallet with a passphrase.
-    #[arg(long)]
-    passphrase: bool,
 }
 
-/// Arguments for the `balance` command.
 #[derive(Args, Debug)]
 struct BalanceArgs {
-    /// The API endpoint of the node.
     #[arg(short, long, default_value = "http://127.0.0.1:9071")]
     node: String,
-    /// Path to the wallet file to check the balance of.
     #[arg(short, long, default_value = "wallet.key")]
     path: String,
-    /// Use a passphrase to decrypt the wallet.
-    #[arg(long)]
-    passphrase: bool,
 }
 
 #[tokio::main]
@@ -124,45 +81,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match &cli.command {
         Commands::Generate(args) => {
-            let wallet = HyperWallet::new()?;
-            println!("Public Key (Address): {}", wallet.get_address());
-            if let Ok(sk) = wallet.get_signing_key() {
-                println!("Private Key: {}", hex::encode(sk.to_bytes()));
+            let wallet = Wallet::new()?;
+            println!("Public Key (Address): {}", wallet.address());
+            let sk = wallet.get_signing_key()?;
+            println!("Private Key: {}", hex::encode(sk.to_bytes()));
+            let mnemonic_phrase = wallet.mnemonic().expose_secret();
+            if !mnemonic_phrase.is_empty() {
+                println!("Mnemonic: {mnemonic_phrase}");
             }
-            if let Some(mnemonic) = wallet.get_mnemonic() {
-                println!("Mnemonic: {mnemonic}");
-            }
-            let pass = if args.passphrase {
-                Some(prompt_password("Enter passphrase to encrypt wallet: ")?)
-            } else {
-                None
-            };
-            wallet.save_to_file(&args.path, pass.as_deref())?;
+            let pass = prompt_password("Enter passphrase to encrypt wallet: ")?;
+            let secret_pass = SecretString::new(pass);
+            wallet.save_to_file(&args.path, &secret_pass)?;
             info!("Generated and saved new wallet to {}", &args.path);
         }
         Commands::Show(args) => {
-            let pass = if args.passphrase {
-                Some(prompt_password("Enter passphrase: ")?)
-            } else {
-                None
-            };
-            let wallet = HyperWallet::from_file(&args.path, pass.as_deref())?;
+            let pass = prompt_password("Enter passphrase: ")?;
+            let secret_pass = SecretString::new(pass);
+            let wallet = Wallet::from_file(&args.path, &secret_pass)?;
             println!("Showing details for wallet: {}", &args.path);
-            println!("Public Key (Address): {}", wallet.get_address());
+            println!("Public Key (Address): {}", wallet.address());
         }
         Commands::Send(args) => {
             if args.recipient.len() != 64 || hex::decode(&args.recipient).is_err() {
                 return Err("Invalid recipient address".into());
             }
-            let pass = if args.passphrase {
-                Some(prompt_password("Enter passphrase: ")?)
-            } else {
-                None
-            };
-            let wallet = HyperWallet::from_file(&args.path, pass.as_deref())?;
-            let sender_address = wallet.get_address();
-            let he_pub_key_material = &wallet.get_public_key()?.to_bytes();
-            let signing_key_bytes = wallet.get_signing_key()?.to_bytes();
+            let pass = prompt_password("Enter passphrase: ")?;
+            let secret_pass = SecretString::new(pass);
+            let wallet = Wallet::from_file(&args.path, &secret_pass)?;
+            let sender_address = wallet.address();
+            let signing_key = wallet.get_signing_key()?;
+            let he_pub_key_material = &signing_key.verifying_key().to_bytes();
+            let signing_key_bytes = signing_key.to_bytes();
 
             let client = Client::new();
             let fee: u64 = 1;
@@ -256,36 +205,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Commands::Import(args) => {
-            let wallet = HyperWallet::from_private_key(&args.private_key)?;
-            println!("Imported wallet with address: {}", wallet.get_address());
-            let pass = if args.passphrase {
-                Some(prompt_password("Enter passphrase to encrypt wallet: ")?)
-            } else {
-                None
-            };
-            wallet.save_to_file(&args.path, pass.as_deref())?;
+            let wallet = Wallet::from_private_key(&args.private_key)?;
+            println!("Imported wallet with address: {}", wallet.address());
+            let pass = prompt_password("Enter passphrase to encrypt wallet: ")?;
+            let secret_pass = SecretString::new(pass);
+            wallet.save_to_file(&args.path, &secret_pass)?;
             info!("Imported and saved wallet to {}", &args.path);
         }
         Commands::ImportMnemonic(args) => {
-            let wallet = HyperWallet::from_mnemonic(&args.mnemonic)?;
-            println!("Imported wallet with address: {}", wallet.get_address());
-            println!("Mnemonic: {}", wallet.get_mnemonic().unwrap_or_default());
-            let pass = if args.passphrase {
-                Some(prompt_password("Enter passphrase to encrypt wallet: ")?)
-            } else {
-                None
-            };
-            wallet.save_to_file(&args.path, pass.as_deref())?;
+            let wallet = Wallet::from_mnemonic(&args.mnemonic)?;
+            println!("Imported wallet with address: {}", wallet.address());
+            println!("Mnemonic: {}", wallet.mnemonic().expose_secret());
+            let pass = prompt_password("Enter passphrase to encrypt wallet: ")?;
+            let secret_pass = SecretString::new(pass);
+            wallet.save_to_file(&args.path, &secret_pass)?;
             info!("Imported and saved wallet from mnemonic to {}", &args.path);
         }
         Commands::Balance(args) => {
-            let pass = if args.passphrase {
-                Some(prompt_password("Enter passphrase: ")?)
-            } else {
-                None
-            };
-            let wallet = HyperWallet::from_file(&args.path, pass.as_deref())?;
-            let public_key_hex = wallet.get_address();
+            let pass = prompt_password("Enter passphrase: ")?;
+            let secret_pass = SecretString::new(pass);
+            let wallet = Wallet::from_file(&args.path, &secret_pass)?;
+            let public_key_hex = wallet.address();
 
             let client = Client::new();
             let balance_url = format!("{}/balance/{}", &args.node, public_key_hex);

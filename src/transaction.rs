@@ -398,7 +398,7 @@ impl Transaction {
 mod tests {
     use super::*;
     use crate::hyperdag::HyperDAG;
-    use crate::wallet::HyperWallet;
+    use crate::wallet::Wallet;
     use serial_test::serial; // Added
 
     #[tokio::test]
@@ -410,12 +410,12 @@ mod tests {
             std::fs::remove_dir_all("hyperdag_db")?;
         }
 
-        let wallet = Arc::new(HyperWallet::new()?);
+        let wallet = Arc::new(Wallet::new()?);
 
         let signing_key_dalek = wallet.get_signing_key()?;
         let signing_key_bytes_slice: &[u8] = &signing_key_dalek.to_bytes();
 
-        let sender_address = wallet.get_address();
+        let sender_address = wallet.address();
 
         let amount_to_receiver = 50;
         let fee = 5;
@@ -442,8 +442,8 @@ mod tests {
 
         let change_amount = input_utxo_amount - amount_to_receiver - fee - dev_fee_on_transfer;
 
-        let he_public_key_dalek = wallet.get_public_key()?;
-        let he_pub_key_material_slice: &[u8] = &he_public_key_dalek.to_bytes();
+        let he_public_key_dalek = wallet.get_signing_key()?.verifying_key();
+        let he_pub_key_material_slice: &[u8] = he_public_key_dalek.as_bytes();
 
         let mut outputs_for_tx = vec![Output {
             address: "0000000000000000000000000000000000000000000000000000000000000001".to_string(),
