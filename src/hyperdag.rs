@@ -1,6 +1,7 @@
 use crate::emission::Emission;
 use crate::mempool::Mempool;
-use crate::transaction::{Transaction, TransactionError}; // Import TransactionError
+use crate::transaction::{Transaction, TransactionError};
+use ed25519_dalek::{Signature as DalekSignature, Signer, SigningKey, Verifier, VerifyingKey};
 use hex;
 use log::{error, info, warn};
 use lru::LruCache;
@@ -74,7 +75,6 @@ pub enum HyperDAGError {
     EmissionError(String),
 }
 
-// New struct to hold arguments for serialize_for_signing
 pub struct SigningData<'a> {
     pub parents: &'a [String],
     pub transactions: &'a [Transaction],
@@ -87,7 +87,6 @@ pub struct SigningData<'a> {
     pub merkle_root: &'a str,
 }
 
-// New struct to hold arguments for initiate_cross_chain_swap
 #[derive(Debug)]
 pub struct CrossChainSwapParams {
     pub source_chain: u32,
@@ -107,48 +106,30 @@ pub struct LatticeSignature {
 
 impl LatticeSignature {
     #[instrument]
-    pub fn new(signing_key: &[u8]) -> Self {
-        let mut public_key = signing_key.to_vec();
-        for _ in 0..32 {
-            let mut hasher = Keccak256::new();
-            hasher.update(&public_key);
-            let hash = hasher.finalize();
-            public_key.extend_from_slice(hash.as_slice());
-        }
-        let mut signature = vec![0u8; 64];
-        for (i, byte) in signing_key.iter().enumerate() {
-            signature[i % 64] ^= *byte;
-        }
-        Self {
-            public_key: public_key[..32.min(public_key.len())].to_vec(),
-            signature,
-        }
+    pub fn sign(signing_key_bytes: &[u8], message: &[u8]) -> Result<Self, HyperDAGError> {
+        let signing_key = SigningKey::from_bytes(
+            signing_key_bytes
+                .try_into()
+                .map_err(|_| HyperDAGError::InvalidBlock("Invalid signing key length".to_string()))?,
+        );
+        let public_key = signing_key.verifying_key();
+        let signature = signing_key.sign(message);
+
+        Ok(Self {
+            public_key: public_key.to_bytes().to_vec(),
+            signature: signature.to_bytes().to_vec(),
+        })
     }
 
     #[instrument]
-    pub fn sign(&self, message: &[u8]) -> Vec<u8> {
-        let mut hasher = Keccak256::new();
-        hasher.update(message);
-        hasher.update(&self.public_key);
-        let hash = hasher.finalize();
-        let mut signed = self.signature.clone();
-        for (i, byte) in hash.iter().enumerate() {
-            signed[i % 64] ^= *byte;
-        }
-        signed
-    }
+    pub fn verify(&self, message: &[u8]) -> bool {
+        let Ok(pk_bytes) = <&[u8; 32]>::try_from(self.public_key.as_slice()) else { return false; };
+        let Ok(verifying_key) = VerifyingKey::from_bytes(pk_bytes) else { return false; };
 
-    #[instrument]
-    pub fn verify(&self, message: &[u8], signature_to_verify: &[u8]) -> bool {
-        let mut hasher = Keccak256::new();
-        hasher.update(message);
-        hasher.update(&self.public_key);
-        let hash = hasher.finalize();
-        let mut expected_signature = self.signature.clone();
-        for (i, byte) in hash.iter().enumerate() {
-            expected_signature[i % 64] ^= *byte;
-        }
-        signature_to_verify == expected_signature
+        let Ok(sig_bytes) = <&[u8; 64]>::try_from(self.signature.as_slice()) else { return false; };
+        let signature = DalekSignature::from_bytes(sig_bytes);
+
+        verifying_key.verify(message, &signature).is_ok()
     }
 }
 
@@ -284,9 +265,6 @@ impl HyperBlock {
 
         let merkle_root = Self::compute_merkle_root(&transactions)?;
 
-        let lattice_signer = LatticeSignature::new(signing_key_material);
-        let public_key_for_signature = lattice_signer.public_key.clone();
-
         let signing_data = SigningData {
             parents: &parents,
             transactions: &transactions,
@@ -303,11 +281,11 @@ impl HyperBlock {
         let id = hex::encode(Keccak256::digest(&pre_signature_data_for_id));
 
         let final_signature_payload = Self::serialize_for_signing(&signing_data)?;
-        let signature_bytes = lattice_signer.sign(&final_signature_payload);
+        let lattice_signature = LatticeSignature::sign(signing_key_material, &final_signature_payload)?;
 
         let homomorphic_encrypted_data = transactions
             .iter()
-            .map(|tx| HomomorphicEncrypted::new(tx.amount, &public_key_for_signature))
+            .map(|tx| HomomorphicEncrypted::new(tx.amount, &lattice_signature.public_key))
             .collect();
 
         Ok(Self {
@@ -324,10 +302,7 @@ impl HyperBlock {
             cross_chain_references: vec![],
             cross_chain_swaps: vec![],
             merkle_root,
-            lattice_signature: LatticeSignature {
-                public_key: public_key_for_signature,
-                signature: signature_bytes,
-            },
+            lattice_signature,
             homomorphic_encrypted: homomorphic_encrypted_data,
             smart_contracts: vec![],
         })
@@ -662,15 +637,16 @@ impl HyperDAG {
             .map_err(HyperDAGError::EmissionError)?;
         let dev_fee = (reward as f64 * DEV_FEE_RATE) as u64;
         let miner_reward = reward.saturating_sub(dev_fee);
+        
+        let reward_tx_signature = LatticeSignature::sign(validator_signing_key, &now.to_be_bytes())?;
 
-        let temp_lattice_signer = LatticeSignature::new(validator_signing_key);
         let reward_outputs = vec![
             crate::transaction::Output {
                 address: validator_address.to_string(),
                 amount: miner_reward,
                 homomorphic_encrypted: HomomorphicEncrypted::new(
                     miner_reward,
-                    &temp_lattice_signer.public_key,
+                    &reward_tx_signature.public_key,
                 ),
             },
             crate::transaction::Output {
@@ -678,7 +654,7 @@ impl HyperDAG {
                 amount: dev_fee,
                 homomorphic_encrypted: HomomorphicEncrypted::new(
                     dev_fee,
-                    &temp_lattice_signer.public_key,
+                    &reward_tx_signature.public_key,
                 ),
             },
         ];
@@ -693,8 +669,8 @@ impl HyperDAG {
             fee: 0,
             inputs: vec![],
             outputs: reward_outputs,
-            lattice_signature: temp_lattice_signer.sign(&now.to_be_bytes()),
-            public_key: temp_lattice_signer.public_key.clone(),
+            lattice_signature: reward_tx_signature.signature,
+            public_key: reward_tx_signature.public_key,
             timestamp: now,
         };
 
@@ -782,7 +758,7 @@ impl HyperDAG {
         let signature_data = HyperBlock::serialize_for_signing(&signing_data)?;
         if !block
             .lattice_signature
-            .verify(&signature_data, &block.lattice_signature.signature)
+            .verify(&signature_data)
         {
             return Err(HyperDAGError::LatticeSignatureVerification);
         }
