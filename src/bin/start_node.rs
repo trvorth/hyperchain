@@ -1,6 +1,6 @@
 use anyhow::Context;
 use clap::Parser;
-use hyperchain::{config::Config, node::Node, wallet::HyperWallet};
+use hyperchain::{config::Config, node::Node, wallet::Wallet};
 use log::{error, info, warn};
 use std::path::Path;
 use std::sync::Arc;
@@ -43,7 +43,7 @@ async fn main() -> anyhow::Result<()> {
     info!("Starting HyperDAG node (from start_node.rs)...");
 
     // Create a new wallet instance. In a real scenario, you might load an existing one.
-    let wallet = HyperWallet::new()?;
+    let wallet = Wallet::new()?;
     let wallet_arc = Arc::new(wallet);
 
     // SECURITY: Ensure private key files have restrictive permissions.
