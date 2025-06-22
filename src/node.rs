@@ -525,7 +525,7 @@ impl Node {
 async fn rate_limit_layer(
     MiddlewareState(limiter): MiddlewareState<Arc<DirectApiRateLimiter>>,
     req: HttpRequest<Body>,
-    next: Next<Body>,
+    next: Next,
     route_name: &str,
 ) -> Result<axum::response::Response, StatusCode> {
     if limiter.check().is_err() {
@@ -604,7 +604,7 @@ async fn publish_readiness_handler(
         is_ready,
         block_count: blocks_read_guard.len(),
         utxo_count: utxos_read_guard.len(),
-        peer_count: 0,
+        peer_count: 0, 
         mempool_size: mempool_read_guard.size().await,
         issues,
     }))
@@ -758,7 +758,7 @@ mod tests {
         let genesis_validator_addr = wallet_arc.address();
 
         let rand_id: u32 = rand::thread_rng().gen();
-        let temp_config_path = format!("./temp_test_node_config_{}.toml", rand_id);
+        let temp_config_path = format!("./temp_test_config_{}.toml", rand_id);
         let temp_identity_path = format!("./temp_p2p_identity_{}.key", rand_id);
         let temp_peer_cache_path = format!("./temp_peer_cache_{}.json", rand_id);
 
