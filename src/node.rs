@@ -758,9 +758,9 @@ mod tests {
         let genesis_validator_addr = wallet_arc.address();
 
         let rand_id: u32 = rand::thread_rng().gen();
-        let temp_config_path = format!("./temp_test_config_{}.toml", rand_id);
-        let temp_identity_path = format!("./temp_p2p_identity_{}.key", rand_id);
-        let temp_peer_cache_path = format!("./temp_peer_cache_{}.json", rand_id);
+        let temp_config_path = format!("./temp_test_config_{rand_id}.toml");
+        let temp_identity_path = format!("./temp_p2p_identity_{rand_id}.key");
+        let temp_peer_cache_path = format!("./temp_peer_cache_{rand_id}.json");
 
         let test_config = Config {
             p2p_address: "/ip4/127.0.0.1/tcp/0".to_string(),
