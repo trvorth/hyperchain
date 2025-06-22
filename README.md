@@ -92,34 +92,30 @@ Building on Windows requires the MSVC C++ toolchain and manual installation of R
     cd hyperchain
     cargo build --release
     ```
-The compiled binary will be located at `target/release/hyperdag.exe`.
+The compiled binary will be located at `target/release/hyperchain.exe`.
 
 ## Running a Node: A Quick Start Guide
 
 1.  **Generate Your Wallet:**
-    If this is your first time running a node, or if you intend to be a genesis validator, you must generate a wallet. The `keygen` utility creates a new keypair and saves it to `wallet.key` in the root directory.
+    If this is your first time running a node, you must generate a wallet. The `hyperwallet` utility creates a new keypair, prompts for a secure passphrase, and saves it to `wallet.key` in the root directory.
     ```bash
-    cargo run --bin keygen
+    cargo run --release --bin hyperwallet new
     ```
-    **IMPORTANT**: The output will display your `Private Key`, `Public Address`, and `Mnemonic Phrase`. Back up your mnemonic phrase in a secure, offline location. **The public address is what you will use as the `genesis_validator` in the config file.**
+    **IMPORTANT**: The output will display your `Public Address` and `Mnemonic Phrase`. Back up your mnemonic phrase in a secure, offline location. **The public address is what you will use as the `initial_validators` in the config file.**
 
 2.  **Configure Your Node:**
     The repository includes an example configuration file. Copy it to create your own `config.toml`.
     ```bash
     cp config.toml.example config.toml
     ```
-    Open `config.toml` in your text editor. At a minimum, you must set the `genesis_validator` field to the public address you generated in the previous step.
+    Open `config.toml` in your text editor. At a minimum, you must set the `initial_validators` field to the public address you generated in the previous step.
 
 3.  **Launch the Node:**
-    Start the HyperChain node, pointing it to your configuration file.
+    Start the HyperChain node. It will automatically load your configuration and wallet.
     ```bash
-    # On Linux/macOS
-    cargo run --bin hyperdag --config-path config.toml
-
-    # On Windows
-    cargo run --bin hyperdag --config-path config.toml
+    cargo run --release --bin start_node
     ```
-    Your node will initialize, start its P2P services, and attempt to connect to peers or begin mining the genesis block if it's the first node.
+    Your node will initialize, prompt for your wallet passphrase, start its P2P services, and attempt to connect to peers or begin mining the genesis block.
 
 ## Testnet Participation
 
