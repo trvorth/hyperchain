@@ -394,6 +394,27 @@ impl Transaction {
     }
 }
 
+impl Zeroize for Transaction {
+    fn zeroize(&mut self) {
+        self.id.zeroize();
+        self.sender.zeroize();
+        self.receiver.zeroize();
+        self.amount = 0;
+        self.fee = 0;
+        self.inputs.clear();
+        self.outputs.clear();
+        self.lattice_signature.zeroize();
+        self.public_key.zeroize();
+        self.timestamp = 0;
+    }
+}
+
+impl Drop for Transaction {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -495,14 +516,14 @@ mod tests {
         let dag_instance_for_test =
             HyperDAG::new(&sender_address, 60000, 100, 1, dag_signing_key_bytes_slice)
                 .await
-                .map_err(|e| format!("DAG creation error for test: {:?}", e))?;
+                .map_err(|e| format!("DAG creation error for test: {e:?}"))?;
 
         let dag_arc_for_test = Arc::new(RwLock::new(dag_instance_for_test));
         let utxos_arc_for_test = Arc::new(RwLock::new(initial_utxos_map));
 
         tx.verify(&dag_arc_for_test, &utxos_arc_for_test)
             .await
-            .map_err(|e| format!("TX verification error: {:?}", e))?;
+            .map_err(|e| format!("TX verification error: {e:?}"))?;
 
         let generated_utxo_instance = tx.generate_utxo(0);
         assert_eq!(generated_utxo_instance.tx_id, tx.id);
@@ -511,30 +532,9 @@ mod tests {
         let anomaly_score_value = tx
             .detect_anomaly(&tx_timestamps_map)
             .await
-            .map_err(|e| format!("Anomaly detection error: {:?}", e))?;
+            .map_err(|e| format!("Anomaly detection error: {e:?}"))?;
         assert!(anomaly_score_value >= 0.0);
 
         Ok(())
-    }
-}
-
-impl Zeroize for Transaction {
-    fn zeroize(&mut self) {
-        self.id.zeroize();
-        self.sender.zeroize();
-        self.receiver.zeroize();
-        self.amount = 0;
-        self.fee = 0;
-        self.inputs.clear();
-        self.outputs.clear();
-        self.lattice_signature.zeroize();
-        self.public_key.zeroize();
-        self.timestamp = 0;
-    }
-}
-
-impl Drop for Transaction {
-    fn drop(&mut self) {
-        self.zeroize();
     }
 }

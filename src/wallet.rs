@@ -10,11 +10,11 @@ use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use rand::Rng;
 use secrecy::{ExposeSecret, Secret, SecretVec};
 use serde::{Deserialize, Serialize};
-use sha2::digest::typenum::Unsigned;
 use std::convert::TryInto;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
+use typenum::Unsigned;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 const WALLET_FILE_VERSION: u8 = 2;
@@ -194,12 +194,14 @@ impl Wallet {
         let ciphertext = cipher
             .encrypt(&nonce, plaintext.as_slice())
             .map_err(|e| WalletError::Encryption(e.to_string()))?;
-        let salt_string = salt.as_str();
-        let salt_len = (salt_string.len() as u32).to_le_bytes();
+        
+        let phc_string = password_hash.to_string();
+        let phc_len = (phc_string.len() as u32).to_le_bytes();
+        
         let mut file_contents = Vec::new();
         file_contents.push(WALLET_FILE_VERSION);
-        file_contents.extend_from_slice(&salt_len);
-        file_contents.extend_from_slice(salt_string.as_bytes());
+        file_contents.extend_from_slice(&phc_len);
+        file_contents.extend_from_slice(phc_string.as_bytes());
         file_contents.extend_from_slice(nonce.as_slice());
         file_contents.extend_from_slice(&ciphertext);
         let mut file = OpenOptions::new()
@@ -228,23 +230,25 @@ impl Wallet {
         if file_contents.len() < 5 {
             return Err(WalletError::InvalidFormat);
         }
-        let salt_len = u32::from_le_bytes(file_contents[1..5].try_into().unwrap()) as usize;
+        let phc_len = u32::from_le_bytes(file_contents[1..5].try_into().unwrap()) as usize;
         let nonce_len = <Aes256Gcm as AeadCore>::NonceSize::to_usize();
-        let salt_start = 5;
-        let salt_end = salt_start + salt_len;
-        let nonce_end = salt_end + nonce_len;
+        let phc_start = 5;
+        let phc_end = phc_start + phc_len;
+        let nonce_end = phc_end + nonce_len;
         if file_contents.len() <= nonce_end {
             return Err(WalletError::InvalidFormat);
         }
-        let salt_str = std::str::from_utf8(&file_contents[salt_start..salt_end])
+        let phc_str = std::str::from_utf8(&file_contents[phc_start..phc_end])
             .map_err(|_| WalletError::InvalidFormat)?;
-        let nonce = generic_array::GenericArray::from_slice(&file_contents[salt_end..nonce_end]);
+        let nonce = generic_array::GenericArray::from_slice(&file_contents[phc_end..nonce_end]);
         let ciphertext = &file_contents[nonce_end..];
         let password_hash =
-            PasswordHash::new(salt_str).map_err(|e| WalletError::Passphrase(e.to_string()))?;
+            PasswordHash::new(phc_str).map_err(|e| WalletError::Passphrase(e.to_string()))?;
+
         Argon2::default()
             .verify_password(passphrase.expose_secret().as_bytes(), &password_hash)
             .map_err(|e| WalletError::Passphrase(e.to_string()))?;
+
         let key_bytes = password_hash
             .hash
             .context("Argon2 hash is missing")
