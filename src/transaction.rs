@@ -105,8 +105,6 @@ impl Transaction {
 
         let timestamp = Self::get_current_timestamp()?;
 
-        let lattice_signature_obj = LatticeSignature::new(config.signing_key_bytes);
-
         let signature_data = Self::serialize_for_signing(
             &config.sender,
             &config.receiver,
@@ -116,7 +114,9 @@ impl Transaction {
             &config.outputs,
             timestamp,
         )?;
-        let signature = lattice_signature_obj.sign(&signature_data);
+        
+        let signature_obj = LatticeSignature::sign(config.signing_key_bytes, &signature_data)
+            .map_err(|_| TransactionError::LatticeSignatureVerification)?;
 
         let mut tx = Self {
             id: String::new(),
@@ -126,8 +126,8 @@ impl Transaction {
             fee: config.fee,
             inputs: config.inputs,
             outputs: config.outputs,
-            lattice_signature: signature,
-            public_key: lattice_signature_obj.public_key.clone(),
+            lattice_signature: signature_obj.signature,
+            public_key: signature_obj.public_key,
             timestamp,
         };
         tx.id = tx.compute_hash();
@@ -278,7 +278,7 @@ impl Transaction {
             &self.outputs,
             self.timestamp,
         )?;
-        if !verifier_lattice_sig.verify(&signature_data_to_verify, &self.lattice_signature) {
+        if !verifier_lattice_sig.verify(&signature_data_to_verify) {
             return Err(TransactionError::LatticeSignatureVerification);
         }
 
@@ -399,13 +399,12 @@ mod tests {
     use super::*;
     use crate::hyperdag::HyperDAG;
     use crate::wallet::Wallet;
-    use serial_test::serial; // Added
+    use serial_test::serial;
 
     #[tokio::test]
-    #[serial] // Added to ensure serial execution
+    #[serial]
     async fn test_transaction_creation_and_verification() -> Result<(), Box<dyn std::error::Error>>
     {
-        // Clean up the database directory before the test to ensure a clean state
         if std::path::Path::new("hyperdag_db").exists() {
             std::fs::remove_dir_all("hyperdag_db")?;
         }

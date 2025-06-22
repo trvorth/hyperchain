@@ -124,7 +124,7 @@ impl From<KadEvent> for NodeBehaviourEvent {
 pub struct NetworkMessage {
     data: NetworkMessageData,
     hmac: Vec<u8>,
-    lattice_sig: Vec<u8>,
+    signature: LatticeSignature,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -142,13 +142,13 @@ impl NetworkMessage {
         let serialized_data = serde_json::to_vec(&data)?;
         let hmac = Self::compute_hmac(&serialized_data, &hmac_secret)?;
 
-        let temp_lattice_signer = LatticeSignature::new(lattice_key_material);
-        let lattice_sig = temp_lattice_signer.sign(&serialized_data);
+        let signature = LatticeSignature::sign(lattice_key_material, &serialized_data)
+            .map_err(|e| P2PError::LatticeAuth(e.to_string()))?;
 
         Ok(Self {
             data,
             hmac,
-            lattice_sig,
+            signature,
         })
     }
 
@@ -178,7 +178,6 @@ pub enum P2PCommand {
 
 type KeyedPeerRateLimiter = RateLimiter<PeerId, DashMapStateStore<PeerId>, DefaultClock>;
 
-// Configuration struct for P2PServer::new
 #[derive(Debug)]
 pub struct P2PConfig<'a> {
     pub topic_prefix: &'a str,
@@ -193,7 +192,6 @@ pub struct P2PConfig<'a> {
     pub peer_cache_path: String,
 }
 
-// Context struct for processing gossip messages
 pub struct GossipMessageContext {
     pub blacklist: Arc<RwLock<HashSet<PeerId>>>,
     pub rate_limiter_block: Arc<KeyedPeerRateLimiter>,
@@ -629,14 +627,15 @@ impl P2PServer {
         };
 
         let hmac_secret = NetworkMessage::get_hmac_secret();
-        let serialized_data_for_hmac = match serde_json::to_vec(&msg_payload.data) {
+        let serialized_data_for_verification = match serde_json::to_vec(&msg_payload.data) {
             Ok(d) => d,
             Err(e) => {
-                warn!("Failed to serialize message data for HMAC check from {source}: {e}");
+                warn!("Failed to serialize message data for verification from {source}: {e}");
                 return;
             }
         };
-        match NetworkMessage::compute_hmac(&serialized_data_for_hmac, &hmac_secret) {
+        
+        match NetworkMessage::compute_hmac(&serialized_data_for_verification, &hmac_secret) {
             Ok(computed_hmac) if computed_hmac == msg_payload.hmac => {
                 debug!("HMAC verification passed for message from {source}");
             }
@@ -648,8 +647,15 @@ impl P2PServer {
             }
         }
 
+        if !msg_payload.signature.verify(&serialized_data_for_verification) {
+            warn!("Lattice signature verification failed for message from peer {source}");
+            context.blacklist.write().await.insert(source);
+            PEERS_BLACKLISTED.inc();
+            return;
+        }
+
         MESSAGES_RECEIVED.inc();
-        info!("Processing verified (HMAC) message data from {source} on topic {topic_str}");
+        info!("Processing verified (HMAC & Sig) message data from {source} on topic {topic_str}");
         match msg_payload.data {
             NetworkMessageData::Block(block) => {
                 P2PServer::static_process_block(
