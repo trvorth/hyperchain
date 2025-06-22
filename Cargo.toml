@@ -5,22 +5,28 @@ edition = "2021"
 authors = ["Trevor <thieuquangphu@icloud.com>"]
 description = "A decentralized blockchain network with advanced P2P and cryptographic features"
 license = "MIT"
+repository = "https://github.com/trvorth/hyperchain"
 
 [dependencies]
 # Core blockchain and networking
-libp2p = { version = "0.53.2", features = ["tcp", "tokio", "noise", "gossipsub", "yamux", "mdns", "macros", "identify", "ping", "kad"] }
-futures = "0.3.28"
-tokio = { version = "1.32.0", features = ["full", "test-util","rt-multi-thread", "time"] }
-axum = { version = "0.6.20", features = ["macros"] }
-axum-server = { version = "0.5.1", features = ["tls-rustls"] }
-reqwest = { version = "0.11.20", features = ["json"] }
-tower-http = { version = "0.4.4", features = ["cors"] }
-anyhow = "1.0.75"
+# UPDATED libp2p to a newer version to resolve security vulnerabilities in its dependencies.
+# UPDATED axum to a newer version, which requires code changes in `src/node.rs`.
+libp2p = { version = "0.54.1", features = ["full"] }
+futures = "0.3.30"
+tokio = { version = "1.38.0", features = ["full", "test-util", "rt-multi-thread", "time"] }
+axum = { version = "0.7.5", features = ["macros", "ws"] }
+axum-server = "0.7.2"
+reqwest = { version = "0.12.5", features = ["json"] }
+tower-http = { version = "0.5.2", features = ["cors"] }
+anyhow = "1.0.86"
+hyper = { version = "1.3.1", features = ["full"] }
+prost = "0.12.6"
+tonic = { version = "0.11.0", features = ["transport", "codegen", "prost"] }
 
 # Cryptography and security
 secrecy = { version = "0.8", features = ["serde"] }
 bincode = "1.3.3"
-argon2 = "0.5.3"
+argon2 = { version = "0.5.3", features = ["alloc"] }
 aes-gcm = "0.10.3"
 bip39 = "2.1.0"
 ed25519-dalek = { version = "2.1.1", features = ["serde", "rand_core"] }
@@ -29,36 +35,48 @@ sha2 = "0.10.8"
 hmac = "0.12.1"
 hex = "0.4.3"
 rand = "0.8.5"
+rand_core = { version = "0.6.4", features = ["std"] }
 zeroize = { version = "1.7.0", features = ["zeroize_derive"] }
 subtle = "2.5.0"
 protobuf = { version = "3.4.0", features = ["with-bytes"] }
 openssl = { version = "0.10.64", features = ["vendored"] }
-generic-array = "0.14"
+generic-array = "0.14.7"
 typenum = "1.17" 
+blake2 = "0.10.6"
+password-hash = { version = "0.5.0", features = ["std"] }
+rcgen = "0.13.1"
+schnorrkel = "0.11.4"
+rsa = "0.9.8"
+x25519-dalek = "2.0.1"
+group = "0.13.0"
+elliptic-curve = { version = "0.13.8", features = ["serde"] }
+p256 = { version = "0.13.2", features = ["ecdsa", "serde"] }
+ecdsa = { version = "0.16.1", features = ["signing", "verifying"] }
 
 # Data handling and serialization
-serde = { version = "1.0.197", features = ["derive"] }
-serde_json = "1.0.115"
+serde = { version = "1.0.203", features = ["derive"] }
+serde_json = "1.0.117"
 serde_bytes = "0.11.14"
-toml = "0.8.12"
+toml = "0.8.14"
 rocksdb = { version = "0.22.0", default-features = false, features = ["lz4"] }
 lru = "0.12.3"
-prometheus = { version = "0.13.3", default-features = false, features = ["process"] }
-lazy_static = "1.4.0"
+prometheus = { version = "0.13.4", default-features = false, features = ["process"] }
+lazy_static = "1.5.0"
 once_cell = "1.19.0"
 dashmap = "5.5.3"
-regex = "1.10.4"
-nalgebra = "0.32.5"
-url = "2.5.0"
+regex = "1.10.5"
+nalgebra = "0.32.6"
+url = "2.5.2"
 uuid = { version = "1.8.0", features = ["v4", "serde"] }
 chrono = { version = "0.4.38", features = ["serde"] }
-sysinfo = "0.30.11"
-rayon = "1.9.0"
+sysinfo = "0.30.12"
+rayon = "1.10.0"
 zstd = "0.13.1"
-
+bytes = "1.6.0"
+merkle-cbt = "0.3.2" # Corrected typo from merkle_cbt
 
 # Error handling and CLI
-thiserror = "1.0.58"
+thiserror = "1.0.61"
 clap = { version = "4.5.4", features = ["derive"] }
 log = "0.4.21"
 env_logger = "0.11.3"
@@ -75,18 +93,23 @@ dotenvy = "0.15.7"
 rpassword = "7.3.1"
 
 # Async traits
-async-trait = "0.1.77"
-tokio-util = { version = "0.7.10", features = ["compat"] }
+async-trait = "0.1.80"
+tokio-util = { version = "0.7.11", features = ["compat"] }
 
 # Optional dependencies for ZK proofs and GPU
 bellman = { version = "0.14.0", optional = true }
 bls12_381 = { version = "0.8.0", optional = true }
 ff = { version = "0.13.0", optional = true }
 ocl = { version = "0.19.7", optional = true }
+schnorr = { version = "0.0.20", optional = true } # Corrected version
+
+[build-dependencies]
+tonic-build = { version = "0.11.0", features = ["prost"] }
 
 [dev-dependencies]
 tempfile = "3.10.1" 
 serial_test = "2.0.0"
+criterion = "0.5.1"
 
 [features]
 default = []
@@ -136,3 +159,8 @@ path = "node2/main.rs"
 [[bin]]
 name = "hyperdag_node3"
 path = "node3/main.rs"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
