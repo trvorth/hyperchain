@@ -17,7 +17,7 @@ HyperChain is a next-generation Layer-0 protocol designed for scalability, inter
 
 For a comprehensive academic and technical overview, please refer to the official [**HyperChain Whitepaper**](http://docs.google.com/docs/hyperchain-whitepaper.md).
 
-## **Key Features**
+## **Core Architectural Tenets**
 
 * **Heterogeneous Architecture**: Natively supports both DAG-based shards and linear PoW/PoS chains within one interoperable ecosystem.  
 * **Dynamic Sharding**: The network autonomously adjusts the number of active DAG shards based on real-time transactional load, ensuring scalability.  
