@@ -49,69 +49,98 @@ These instructions will get you a copy of the project up and running on your loc
 
 To build and run a HyperChain node, you will need to have the following installed on your system:
 
-* **Rust Toolchain**: Install the latest stable version of Rust via rustup.  
-  curl \--proto '=https' \--tlsv1.2 \-sSf \[https://sh.rustup.rs\](https://sh.rustup.rs) | sh
-
-* **Git**: Required for cloning the repository.  
-* **Build Dependencies**: A C++ compiler and the RocksDB library are required. Please follow the instructions specific to your operating system below.
+* **Rust Toolchain**: The latest stable release of the Rust programming language and its associated Cargo build system must be installed via `rustup`.
+    ```bash
+    curl --proto '=https' --tlsv1.2 -sSf [https://sh.rustup.rs](https://sh.rustup.rs) | sh
+    ```
+* **Git**: The Git version control system is required for cloning the source code repository.
+* **Build-System Dependencies**: A C++ compiler toolchain and the RocksDB library constitute essential build dependencies. The requisite installation procedures vary by operating system.
 
 ### **Build Instructions (Linux & macOS)**
 
 1. **Install Build Essentials**:  
-   * **Debian/Ubuntu**: sudo apt-get update && sudo apt-get install build-essential clang librocksdb-dev  
-   * **macOS (with Homebrew)**: xcode-select \--install && brew install rocksdb  
-   * **Fedora/CentOS**: sudo dnf groupinstall "Development Tools" && sudo dnf install rocksdb-devel  
+    * For Debian-based distributions (e.g., Ubuntu):
+        ```bash
+        sudo apt-get update && sudo apt-get install build-essential clang librocksdb-dev
+        ```
+    * For macOS systems utilizing the Homebrew package manager:
+        ```bash
+        xcode-select --install && brew install rocksdb
+        ```
+    * For Fedora, CentOS, or RHEL-based distributions:
+        ```bash
+        sudo dnf groupinstall "Development Tools" && sudo dnf install rocksdb-devel
+        ```
+ 
 2. **Clone and Compile**:  
-   git clone \[https://github.com/trvorth/hyperchain.git\](https://github.com/trvorth/hyperchain.git)  
-   cd hyperchain  
-   cargo build \--release
-
-The compiled binaries will be located at target/release/.
+    ```bash
+    git clone [https://github.com/trvorth/hyperchain.git](https://github.com/trvorth/hyperchain.git)
+    cd hyperchain
+    cargo build --release
+    ```
+    Upon successful compilation, the resultant binaries will be situated in the `target/release/` directory.
 
 ### **Build Instructions (Windows)**
 
 Building on Windows requires the MSVC C++ toolchain and manual installation of RocksDB via vcpkg.
 
-1. **Install Microsoft C++ Build Tools**:  
-   * Download the [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/).  
-   * Run the installer and select the **"C++ build tools"** workload. Make sure the latest Windows SDK and English language pack are included.  
-2. **Install and Configure vcpkg**:  
-   * Open PowerShell and clone the vcpkg repository.  
-     git clone \[https://github.com/Microsoft/vcpkg.git\](https://github.com/Microsoft/vcpkg.git)  
-     cd vcpkg  
-     ./bootstrap-vcpkg.bat  
-     ./vcpkg integrate install
+1.  **Installation of Microsoft C++ Build Tools**:
+    * It is required to download the [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/).
+    * The installer must be executed, and the **"C++ build tools"** workload is to be selected for installation. It should be ensured that the latest Windows SDK and the English language pack are included.
 
-3. **Install RocksDB via vcpkg**:  
-   * Use vcpkg to install the required 64-bit RocksDB library. This may take some time.  
-     ./vcpkg.exe install rocksdb:x64-windows
+2.  **Installation and Configuration of `vcpkg`**:
+    * An instance of the PowerShell terminal is to be opened for the purpose of cloning the `vcpkg` repository.
+        ```powershell
+        git clone [https://github.com/Microsoft/vcpkg.git](https://github.com/Microsoft/vcpkg.git)
+        cd vcpkg
+        ./bootstrap-vcpkg.bat
+        ./vcpkg integrate install
+        ```
 
-4. **Set Environment Variables**:  
-   * You must set an environment variable to tell Cargo where to find the RocksDB library files. Open PowerShell as an **Administrator** and run the following command (adjust the path if you installed vcpkg elsewhere):  
-     \[System.Environment\]::SetEnvironmentVariable('ROCKSDB\_LIB\_DIR', 'C:\\path\\to\\vcpkg\\installed\\x64-windows\\lib', \[System.EnvironmentVariableTarget\]::Machine)
+3.  **Installation of RocksDB via `vcpkg`**:
+    * The `vcpkg` utility shall be used to install the 64-bit version of the RocksDB library. This operation may require a considerable amount of time to complete.
+        ```powershell
+        ./vcpkg.exe install rocksdb:x64-windows
+        ```
 
-   * **IMPORTANT**: You will need to **restart your terminal or IDE** for this environment variable to take effect.  
-5. **Clone and Compile**:  
-   * Open a **new** terminal window.
+4.  **Configuration of Environment Variables**:
+    * An environment variable must be established to inform the Cargo build system of the location of the RocksDB library files. A PowerShell terminal with administrative privileges must be utilized to execute the following command, with the file path adjusted to correspond to the `vcpkg` installation directory:
+        ```powershell
+        [System.Environment]::SetEnvironmentVariable('ROCKSDB_LIB_DIR', 'C:\path\to\vcpkg\installed\x64-windows\lib', [System.EnvironmentVariableTarget]::Machine)
+        ```
+    * **Note Bene**: A restart of the terminal or Integrated Development Environment (IDE) is mandatory for this environment variable modification to take effect.
 
-git clone \[https://github.com/trvorth/hyperchain.git\](https://github.com/trvorth/hyperchain.git)  
-cd hyperchain  
-cargo build \--release
+5.  **Repository Cloning and Compilation**:
+    * A new terminal instance must be opened.
+    ```bash
+    git clone [https://github.com/trvorth/hyperchain.git](https://github.com/trvorth/hyperchain.git)
+    cd hyperchain
+    cargo build --release
+    ```
+    The compiled binaries will be located at `target/release/`.
 
-The compiled binaries will be located at target/release/.
+### **Operational Quick Start**
 
-### **Quick Start**
+1.  **Wallet Credential Generation**:
+    The `hyperwallet` utility is provided for the creation of a new keypair. Upon execution, the operator will be prompted to supply a secure passphrase for the encryption of the resultant wallet file, `wallet.key`.
+    ```bash
+    cargo run --release --bin hyperwallet new
+    ```
+   **Critical Notice**: The `Public Address` emitted by this operation must be copied. Furthermore, the associated `Mnemonic Phrase` must be transcribed and stored in a secure, offline medium for recovery purposes.
 
-1. **Generate a Wallet:** The hyperwallet utility creates a new keypair. You will be prompted to set a secure passphrase.  
-   cargo run \--release \--bin hyperwallet new
+2.  **Node Configuration**:
+    An exemplary configuration file is provided within the repository. A local copy must be created for operational use.
+    ```bash
+    cp config.toml.example config.toml
+    ```
+    The newly created `config.toml` file must be edited to substitute the placeholder value of the `initial_validators` field with the public address generated in the preceding step.
 
-   **IMPORTANT**: Copy the Public Address from the output. You will need it for the next step.  
-2. **Configure Your Node:** Copy the example configuration file.  
-   cp config.toml.example config.toml
-
-   Open config.toml and set the initial\_validators field to the public address you just generated.  
-3. **Launch the Node:** Start the HyperChain node. You will be prompted for your wallet passphrase.  
-   cargo run \--release \--bin start\_node
+3.  **Node Instantiation**:
+    The HyperChain node may be initiated by executing the `start_node` binary. The system will automatically load the configuration and wallet files.
+    ```bash
+    cargo run --release --bin start_node
+    ```
+    The operator will be prompted to supply the wallet passphrase, after which the node will initialize its services and commence network operations.
 
 ## **Developer Resources**
 
@@ -128,7 +157,7 @@ For details on joining the public testnet, including hardware requirements, ince
 
 The security of the network is our highest priority. We have a formal plan for a comprehensive third-party audit. For more details, please see our [**Security Audit Plan**](./docs/security-audit-plan.md).
 
-## **Contributing**
+## **Contribution Protocol**
 
 We welcome contributions from the community\! This project thrives on collaboration and outside feedback. Please read our [**Contribution Guidelines**](http://docs.google.com/CONTRIBUTING.md) to get started.  
 All participants are expected to follow our [**Code of Conduct**](http://docs.google.com/CODE_OF_CONDUCT.md).
