@@ -41,7 +41,7 @@ The hyperchain repository is a Cargo workspace containing several key components
 * **/docs**: Project documentation, including the whitepaper and launch plans.  
 * **config.toml.example**: An example configuration file for the node.
 
-Developer & Research Materia
+## **Developer & Research Materia**
 
 * **Formal Specification (Whitepaper)**: [docs/hyperchain-whitepaper.md](./docs/hyperchain-whitepaper.md)
 * **System Architecture Overview**: [Architecture.md](./Architecture.md)
