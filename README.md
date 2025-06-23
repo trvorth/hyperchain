@@ -163,10 +163,10 @@ The security of the network is our highest priority. We have a formal plan for a
 
 ## **Contribution Protocol**
 
-We welcome contributions from the community\! This project thrives on collaboration and outside feedback. Please read our [**Contribution Guidelines**](http://github.com/trvorth/hyperchain/CONTRIBUTING.md) to get started.  
-All participants are expected to follow our [**Code of Conduct**](http://github.com/trvorth/hyperchain/CODE_OF_CONDUCT.md).
+We welcome contributions from the community\! This project thrives on collaboration and outside feedback. Please read our [**Contribution Guidelines**](./CONTRIBUTING.md) to get started.  
+All participants are expected to follow our [**Code of Conduct**](./CODE_OF_CONDUCT.md).
 
 ## **License**
 
-This project is licensed under the MIT License. See the [LICENSE](http://docs.google.com/LICENSE) file for details.
+This project is licensed under the MIT License. See the [LICENSE](https://github.com/trvorth/hyperchain/blob/main/LICENSE) file for details.
 
