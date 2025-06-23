@@ -168,5 +168,5 @@ All participants are expected to follow our [**Code of Conduct**](./CODE_OF_COND
 
 ## **License**
 
-This project is licensed under the MIT License. See the [LICENSE](https://github.com/trvorth/hyperchain/blob/main/LICENSE) file for details.
+This project is licensed under the MIT License. See the [LICENSE](./LICENSE) file for details.
 
