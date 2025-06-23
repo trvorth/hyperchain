@@ -48,6 +48,10 @@ The hyperchain repository is a Cargo workspace containing several key components
 * **API Documentation**: A complete specification for the public RPC and REST Application Programming Interfaces is slated for publication prior to the mainnet launch.
 * **Command-Line Interface (CLI) Wallet**: The `hyperwallet` executable furnishes a command-line interface for all requisite wallet and cryptographic key management operations.
 
+## Procedural Guide for Local Instantiation
+
+The subsequent instructions delineate the procedures for obtaining and operating a functional instance of the project on a local machine for purposes of development and testing.
+
 ## **Getting Started: Running a Local Node**
 
 These instructions will get you a copy of the project up and running on your local machine for development and testing purposes.
@@ -159,8 +163,8 @@ The security of the network is our highest priority. We have a formal plan for a
 
 ## **Contribution Protocol**
 
-We welcome contributions from the community\! This project thrives on collaboration and outside feedback. Please read our [**Contribution Guidelines**](http://docs.google.com/CONTRIBUTING.md) to get started.  
-All participants are expected to follow our [**Code of Conduct**](http://docs.google.com/CODE_OF_CONDUCT.md).
+We welcome contributions from the community\! This project thrives on collaboration and outside feedback. Please read our [**Contribution Guidelines**](http://github.com/trvorth/hyperchain/CONTRIBUTING.md) to get started.  
+All participants are expected to follow our [**Code of Conduct**](http://github.com/trvorth/hyperchain/CODE_OF_CONDUCT.md).
 
 ## **License**
 
