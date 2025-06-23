@@ -149,13 +149,6 @@ Building on Windows requires the MSVC C++ toolchain and manual installation of R
     ```
     The operator will be prompted to supply the wallet passphrase, after which the node will initialize its services and commence network operations.
 
-## **Developer Resources**
-
-* **Whitepaper**: [docs/hyperchain-whitepaper.md](http://docs.google.com/docs/hyperchain-whitepaper.md)  
-* **Architecture Overview**: [Architecture.md](http://docs.google.com/Architecture.md)  
-* **API Documentation**: (Coming Soon) A full specification for the public RPC and REST APIs will be published ahead of the mainnet launch.  
-* **CLI Wallet**: The hyperwallet binary provides a command-line interface for all wallet and key management operations. See "Running a Node" for details.
-
 ## **Testnet Participation**
 
 For details on joining the public testnet, including hardware requirements, incentive programs, and bootnode addresses, please refer to the [**Testnet Launch Plan**](./docs/testnet-plan.md).
