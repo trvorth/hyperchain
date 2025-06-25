@@ -15,7 +15,7 @@
 **Topics**: blockchain, layer-0, dag, rust, post-quantum-cryptography, fintech, decentralized-finance  
 HyperChain is a next-generation Layer-0 protocol designed for scalability, interoperability, and long-term security. It features a heterogeneous, multi-chain architecture that combines the speed of Directed Acyclic Graphs (DAGs) with the security of traditional blockchains. By supporting parallel transaction processing and implementing post-quantum cryptography, HyperChain provides a robust and future-proof foundation for decentralized applications, finance, and more.  
 
-For a comprehensive academic and technical overview, please refer to the official [**HyperChain Whitepaper**](./docs/hyperchain-whitepaper.md).
+For a comprehensive academic and technical overview, please refer to the official [**HyperChain Whitepaper**](./hyperchain-whitepaper.pdf).
 
 ## **Core Architectural Tenets**
 
