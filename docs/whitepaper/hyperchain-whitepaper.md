@@ -111,35 +111,15 @@ On the DAG shards, any node may act as a **Miner** to propose a HyperBlock by so
 
 *Diagram: DAG Structure with Tip Selection and Finalization*
 ```
-      /-- (B5) \--\\
+       /-- (B5) \--\\
 
 (T1) \--(B1) \-- (B3) \-- (B6) \-- (C1: Checkpoint) \--\> Finalized
 
-       \\-- (B2) \--/      /
+        \\-- (B2) \--/      /
 
-             \\-- (B4) \--/
+              \\-- (B4) \--/
 ```
 *In this graphic, B1-B6 are blocks. (T1) is a transaction. B5, B6 are current "tips" of the DAG. A miner can choose to build upon them. C1 is a checkpoint block created by validators, which finalizes all preceding blocks (B1-B6) once it reaches the required depth.*
-
-![](./docs/whitepaper/assets/diagrams/consensus.png)
-graph TD
-    B1 --> B3
-    B1 --> B2
-    B2 --> B3
-    B2 --> B4
-    B3 --> B6
-    B3 --> B5
-    B4 --> B6
-    B6 --> C1[Checkpoint C1]
-    C1 --> Finalized
-    
-    T1((T1)) --> B1
-    style T1 fill:#f9f,stroke:#333
-    
-    classDef block fill:#eef,stroke:#ccc;
-    class B1,B2,B3,B4,B5,B6,C1 block;
-```
-*Diagram: DAG Structure with Tip Selection and Finalization*
 
 ### **3.3. Consensus on Execution Chains: Weighted PoW**
 
