@@ -6,7 +6,7 @@ use tracing::instrument;
 
 // Made constants public
 pub const INITIAL_REWARD: u64 = 500; // Initial block reward
-pub const TOTAL_SUPPLY: u64 = 1_000_000_000_000_000; // Total supply cap
+pub const TOTAL_SUPPLY: u64 = 10_000_000_000_000_000; // Total supply cap set to 10 Billion
 pub const HALVING_PERIOD: u64 = 7_884_000; // 3 months (~30.42 days/month * 86,400 seconds/day)
 pub const HALVING_FACTOR: f64 = 0.97; // 3% reduction per halving
 pub const SCALE: u64 = 1_000_000; // Fixed-point scale for precision
