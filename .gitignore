@@ -73,6 +73,7 @@ Thumbs.db
 
 # Specified files
 /header.tex
+/mermaid-filter.err
 
 # Ignore sensitive key and wallet files
 *.key
