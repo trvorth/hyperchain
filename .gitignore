@@ -62,7 +62,8 @@ Thumbs.db
 # Build outputs
 /bin/
 /pkg/
-
+/venv
+/scripts
 /hyperdag_db
 /wallet.key
 /private_key.txt

@@ -1,2 +1,22 @@
-\usepackage{graphicx}
+\usepackage{lmodern}
 \graphicspath{{docs/whitepaper/assets/}}
+\usepackage{amsmath}
+\usepackage{newunicodechar}
+
+% Use standard LaTeX fonts
+\usepackage{mathptmx}   % Times-like font for text
+\usepackage[scaled=0.90]{helvet} % Helvetica-like font for sans-serif (scaled 90%)
+\usepackage{courier}    % Courier-like font for monospace
+
+% Symbol definitions
+\newunicodechar{⌊}{\ensuremath{\lfloor}}
+\newunicodechar{⌋}{\ensuremath{\rfloor}}
+
+% Scale floor symbols
+\renewcommand{\lfloor}{\scalebox{1.2}{$\lfloor$}}
+\renewcommand{\rfloor}{\scalebox{1.2}{$\rfloor$}}
+
+% Safe memory limits
+\maxdeadcycles=1000
+\extrafloats{10000}
+\errorcontextlines=0

@@ -40,9 +40,6 @@ This whitepaper outlines the technical innovations that make HyperChain possible
 
 * **An Incentive-Compatible Economic Model:** Designed for long-term network health and sustainable development.
 
-![HyperDAG Structure](./docs/whitepaper/assets/diagrams/hyperchain_solution_overview.png)
-
-![HyperDAG Structure](./docs/whitepaper/assets/diagrams/hyperchain_advanced_comparison.png)
 
 This paper proceeds by presenting the formal architectural specification of the HyperChain framework (Section 2), its multi-layered hybrid consensus protocol (Section 3), its comprehensive cryptographic suite (Section 4), its economic model (Section 5), its P2P network and governance model (Section 6), a discussion of use cases, implementation, and roadmap (Section 7), and concludes with a summary and directions for future research (Section 8).
 
@@ -63,8 +60,6 @@ The framework supports two primary types of constituent chains, both managed wit
 ### **2.3. Specification: Dynamic DAG Shards (The HyperDAG)**
 
 The core innovation for high-throughput transactions in HyperChain is the **HyperDAG**. Unlike a linear blockchain, a HyperDAG is a directed acyclic graph where each new block (a HyperBlock) can reference and confirm multiple parent blocks. This creates a multi-dimensional, interwoven mesh of transactions, rather than a single file line.
-
-![HyperDAG Structure](./docs/whitepaper/assets/diagrams/hyperdag.png)
 
 #### **2.3.1. Key Advantages of the HyperDAG Structure**
 
@@ -105,20 +100,10 @@ We assume a partially synchronous network model, where messages are delivered wi
 On the DAG shards, any node may act as a **Miner** to propose a HyperBlock by solving a PoW puzzle. This provides a permissionless and Sybil-resistant mechanism for extending the ledger \[1\]. A distinct set of **Validators** is responsible for creating checkpoint blocks that reference a consistent cut of the DAG, thereby finalizing all preceding transactions. This is philosophically similar to the "finality gadget" concept \[7\]. This two-layered mechanism is also referred to as **Proof-of-Work Squared (PoW²)**. Finality is achieved for any block B at a depth of at least kf​ (FINALIZATION\_DEPTH) behind a valid checkpoint block C. The finality condition is:
 
 \\text{is\_finalized}(B) \\iff \\exists C : (\\text{is\_checkpoint}(C) \\land B \\in \\text{history}(C) \\land (\\text{depth}(C) \- \\text{depth}(B) \\geq k\_f))
-
 ![Hybrid Consensus Architecture](./docs/whitepaper/assets/diagrams/consensus.png)
 ---
 
 *Diagram: DAG Structure with Tip Selection and Finalization*
-```
-      /-- (B5) \--\\
-
-(T1) \--(B1) \-- (B3) \-- (B6) \-- (C1: Checkpoint) \--\> Finalized
-
-       \\-- (B2) \--/      /
-
-             \\-- (B4) \--/
-```
 *In this graphic, B1-B6 are blocks. (T1) is a transaction. B5, B6 are current "tips" of the DAG. A miner can choose to build upon them. C1 is a checkpoint block created by validators, which finalizes all preceding blocks (B1-B6) once it reaches the required depth.*
 
 ### **3.3. Consensus on Execution Chains: Weighted PoW**
@@ -180,14 +165,10 @@ The protocol defines a fixed TOTAL\_SUPPLY of 1015 base units and an INITIAL\_RE
 R(t)=NRinitial​​⋅fhalving⌊Phalving​t-tgenesis​​⌋​
 
 This ensures a predictable, deflationary monetary policy adapted for a multi-chain environment. The emission can also be visualized as a logarithmic decay curve over time.
-
 ## Token Emission Model
 
 The HyperCoin emission follows a disinflationary curve:
 
-```math
-E(t) = 500 \cdot e^{-0.357t} \cdot \frac{1}{1 + 0.018t^{1.5}}
-```
 
 Where:
 - $E_0$ = 500 (initial emission)
