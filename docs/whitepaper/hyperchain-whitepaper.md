@@ -121,6 +121,26 @@ On the DAG shards, any node may act as a **Miner** to propose a HyperBlock by so
 ```
 *In this graphic, B1-B6 are blocks. (T1) is a transaction. B5, B6 are current "tips" of the DAG. A miner can choose to build upon them. C1 is a checkpoint block created by validators, which finalizes all preceding blocks (B1-B6) once it reaches the required depth.*
 
+![](./docs/whitepaper/assets/diagrams/consensus.png)
+graph TD
+    B1 --> B3
+    B1 --> B2
+    B2 --> B3
+    B2 --> B4
+    B3 --> B6
+    B3 --> B5
+    B4 --> B6
+    B6 --> C1[Checkpoint C1]
+    C1 --> Finalized
+    
+    T1((T1)) --> B1
+    style T1 fill:#f9f,stroke:#333
+    
+    classDef block fill:#eef,stroke:#ccc;
+    class B1,B2,B3,B4,B5,B6,C1 block;
+```
+*Diagram: DAG Structure with Tip Selection and Finalization*
+
 ### **3.3. Consensus on Execution Chains: Weighted PoW**
 
 On the Execution Chains, a different hybrid model is used. Miners perform PoW to create new Blocks. The Block structure contains a stake\_weight field, calculated from the UTXO value of the block's proposer. The canonical chain is determined by a fork-choice rule that considers not only the cumulative PoW difficulty but also the cumulative stake-weight, blending the permissionless nature of PoW with the "skin-in-the-game" security of PoS \[13\], a model analogous to protocols like Peercoin \[48\].
