@@ -175,9 +175,9 @@ The protocol's security is underpinned by a carefully engineered economic model 
 
 ### **5.1. Monetary Policy and Emission**
 
-The protocol defines a fixed TOTAL\_SUPPLY of 1015 base units and an INITIAL\_REWARD (Rinitial​) of 500 units per checkpoint. The reward undergoes a gradual reduction every HALVING\_PERIOD (Phalving​), where it is multiplied by a HALVING\_FACTOR (fhalving​) of 0.97. The reward for any given block at time t on one of N chains is defined as:
+The protocol defines a fixed TOTAL\_SUPPLY of 10¹⁶ base units (representing 10 billion coins) and an INITIAL_REWARD (Rᵢₙᵢₜᵢₐₗ) of 500 units per checkpoint. The reward undergoes a gradual reduction every HALVING_PERIOD (Pₕₐₗᵥᵢₙ₉), where it is multiplied by a HALVING_FACTOR (fₕₐₗᵥᵢₙ₉) of 0.97. The reward for any given block at time t on one of N chains is defined as:
 
-R(t)=NRinitial​​⋅fhalving⌊Phalving​t-tgenesis​​⌋​
+R(t) = (Rᵢₙᵢₜᵢₐₗ / N) * fₕₐₗᵥᵢₙ₉ ^ floor((t - t₉ₑₙₑₛᵢₛ) / Pₕₐₗᵥᵢₙ₉)
 
 This ensures a predictable, deflationary monetary policy adapted for a multi-chain environment. The emission can also be visualized as a logarithmic decay curve over time.
 
@@ -210,7 +210,6 @@ Where:
 1. **Initial Distribution**: High emission (500 coins/checkpoint) at launch
 2. **Progressive Halving**: Accelerating emission reductions
 3. **Asymptotic Scarcity**: Approaches near-zero emission by Year 32
-4. **Fixed Lifetime Supply**: Total coins capped at ≈ 250,000 HCN
 
 > **Note**: Emission checkpoints occur every 2000 blocks (~2 weeks)
 
