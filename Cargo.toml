@@ -38,7 +38,7 @@ rand = "0.8.5"
 rand_core = { version = "0.6.4", features = ["std"] }
 zeroize = { version = "1.7.0", features = ["zeroize_derive"] }
 subtle = "2.5.0"
-protobuf = { version = "3.4.0", features = ["with-bytes"] }
+protobuf = { version = "3.7.2", features = ["with-bytes"] }
 openssl = { version = "0.10.64", features = ["vendored"] }
 generic-array = "0.14.7"
 typenum = "1.17" 
