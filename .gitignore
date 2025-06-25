@@ -58,7 +58,6 @@ Thumbs.db
 .*.swo
 *.bak
 *.tmp
-*.tex
 
 # Build outputs
 /bin/
@@ -72,6 +71,9 @@ Thumbs.db
 /sync_wallet.sh
 /peer_cache.json
 
+# Specified files
+/header.tex
+/Makefile
 
 # Ignore sensitive key and wallet files
 *.key
