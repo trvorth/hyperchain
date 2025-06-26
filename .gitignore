@@ -14,8 +14,10 @@
 /target/
 /bin/
 /pkg/
-*.pem
-node*/*.pem
+/cert.pem
+/key.pem
+/sync_wallet.sh
+node*/cert.pem
 
 # --- IDE & Editor Files ---
 .idea/
