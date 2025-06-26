@@ -43,7 +43,7 @@ The hyperchain repository is a Cargo workspace containing several key components
 
 ## **Developer & Research Materia**
 
-* **Formal Specification (Whitepaper)**: [docs/hyperchain-whitepaper.md](./docs/hyperchain-whitepaper.md)
+* **Formal Specification (Whitepaper)**: [docs//whitepaper/hyperchain-whitepaper.md](./docs/whitepaper/hyperchain-whitepaper.md)
 * **System Architecture Overview**: [Architecture.md](./Architecture.md)
 * **API Documentation**: A complete specification for the public RPC and REST Application Programming Interfaces is slated for publication prior to the mainnet launch.
 * **Command-Line Interface (CLI) Wallet**: The `hyperwallet` executable furnishes a command-line interface for all requisite wallet and cryptographic key management operations.
