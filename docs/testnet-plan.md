@@ -1,6 +1,6 @@
 # **HyperChain Public Testnet Launch Plan**
 
-**Codename: Ignition** **Version: 1.0** **Status: Planning**
+**Codename: Ignition** **Version: 1.0** **Status: Pre-engagement**
 
 ## **1\. Executive Summary**
 
