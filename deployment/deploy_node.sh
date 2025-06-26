@@ -10,7 +10,7 @@
 set -e # Exit immediately if a command exits with a non-zero status.
 
 # --- Configuration ---
-PROJECT_ID="your-gcp-project-id" # <-- IMPORTANT: SET YOUR GCP PROJECT ID
+PROJECT_ID="gcp-project-id" 
 MACHINE_TYPE="e2-medium"
 REGION="us-central1"
 ZONE="us-central1-a"
