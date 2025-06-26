@@ -1,49 +1,21 @@
-# Binaries for programs
+# ===============================================================
+# HyperChain :: Git Ignore File
+# ===============================================================
+
+# --- Binaries & Compiled Artifacts ---
 *.exe
 *.dll
 *.so
 *.dylib
 *.test
 *.out
-
-# Generated object files and archives
 *.o
 *.a
+/target/
+/bin/
+/pkg/
 
-# Package management
-# Vendored dependencies
-/vendor/
-
-# macOS specific files
-.DS_Store
-
-# Wallet and Key Files 
-*.key
-*.txt 
-keypair.txt
-node1/node1_wallet.key
-node1/private_key.txt
-node2/node2_wallet.key
-node2/private_key.txt
-node3/node3_wallet.key
-node3/private_key.txt
-private_key.txt
-wallet.key
-
-# Build output directories
-target/
-
-# Log files
-*.log
-
-# Certs 
-cert.pem
-key.pem
-
-# Local configuration 
-config.local.json
-
-# IDE and editor files
+# --- IDE & Editor Files ---
 .idea/
 .vscode/
 *.sublime-project
@@ -51,41 +23,58 @@ config.local.json
 .DS_Store
 Thumbs.db
 
-# Temporary files
+# --- macOS & System Files ---
+.DS_Store
+
+# --- Temporary & Backup Files ---
 *~
 #*#
 .*.swp
 .*.swo
 *.bak
 *.tmp
+*temp*
 
-# Build outputs
-/bin/
-/pkg/
-/venv
-/scripts
-/hyperdag_db
+# --- Logs & Databases ---
+*.log
+/hyperdag_db/
+/node*/**/hyperdag_db/
+/peer_cache.json
+
+# --- Sensitive Information ---
+# Ignore wallet keys, private keys, and environment files by default.
+# Use specific names for committed templates, e.g., 'wallet.key.example'.
+*.key
+wallet.key
+private_key.txt
+keypair.txt
+node*/*.key
+node*/*.txt
 /wallet.key
 /private_key.txt
 /keypair.txt
-/sync_wallet.sh
-/peer_cache.json
+.env*
+/deployment/*.local.toml
 
-# Specified files
+# --- Generated Project Files ---
 /header.tex
 /mermaid-filter.err
 
-# Ignore sensitive key and wallet files
-*.key
-*.txt
-/node*/**/hyperdag_db/
-*.log
-*temp*
-.env*
+# --- Language & Framework Specific ---
+# Python
+/venv/
+__pycache__/
+*.pyc
 
-# Rust
-/target
+# Node.js / Web
+/web/node_modules/
+/web/dist/
+/web/.env*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
-# Node/Vite/Web
-/web/node_modules
-/web/dist
+# --- Deployment ---
+# Ignore local deployment archives
+/deployment/*.tar.gz
+/deployment/payload/
