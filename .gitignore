@@ -14,6 +14,8 @@
 /target/
 /bin/
 /pkg/
+*.pem
+node*/*.pem
 
 # --- IDE & Editor Files ---
 .idea/
