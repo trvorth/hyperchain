@@ -5017,8 +5017,9 @@ dependencies = [
 
 [[package]]
 name = "rsa"
-version = "0.9.6"
-source = "git+https://github.com/RustCrypto/RSA?tag=v0.9.6#a801f53a770456e71d2e7964c39ea4ddaf779765"
+version = "0.9.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "78928ac1ed176a5ca1d17e578a1825f3d81ca54cf41053a592584b020cfd691b"
 dependencies = [
  "const-oid",
  "digest",
