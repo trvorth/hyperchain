@@ -7,7 +7,7 @@
 This document outlines the strategic, phased launch plan for the HyperChain Public Testnet, codenamed "Ignition." The Ignition testnet is a critical pre-production environment designed to rigorously validate the protocol's architecture, security, performance, and economic incentives in a live, decentralized setting. The successful execution of this plan is a primary prerequisite for mainnet consideration, as it will provide the empirical data and community engagement necessary to ensure a stable and secure launch.
 
 The launch is structured into three progressive phases:
-
+* **Phase 0 (Pre-engagement): Pre-flight Checklist
 * **Phase 1 (Devnet):** An internal, controlled network for core protocol validation.  
 * **Phase 2 (Gladius):** An incentivized, permissioned network for external validators to test security and performance under structured challenges.  
 * **Phase 3 (Agora):** A permissionless, public network for open participation, dApp development, and governance testing.
@@ -24,6 +24,14 @@ The Ignition testnet is designed to achieve the following key objectives:
 * **Community Bootstrapping:** Cultivate a skilled and engaged global community of node operators, validators, developers, and users.
 
 ## **3\. Phased Rollout Strategy**
+
+### **Phase 0: Pre-flight Checklist**
+
+  * [x] Core protocol implementation complete.
+  * [x] Local single-node and multi-node simulations successful.
+  * [x] Initial `config.toml` template created.
+  * [x] Deployment scripts for cloud infrastructure developed.
+  * [x] Security vulnerabilities from automated scans (Dependabot, CodeQL) are patched or acknowledged.
 
 ### **Phase 1: Devnet (Internal)**
 
@@ -70,7 +78,13 @@ The Ignition testnet is designed to achieve the following key objectives:
 * **CPU:** 4-Core / 8-Thread CPU @ 3.0 GHz+ (e.g., Intel Core i7-8700, AMD Ryzen 5 3600\)  
 * **RAM:** 8 GB DDR4  
 * **Storage:** 256 GB High-Speed NVMe SSD (to accommodate state growth)  
-* **Network:** 100 Mbps symmetric connection with a public, static IP address.
+* **Network:** 5 Mbps symmetric connection with a public, static IP address.
+
+### **Software Prerequisites**
+* **A modern Linux distribution (e.g., Ubuntu 22.04 LTS).
+* **Git version control system.
+* **Rust toolchain (install via `rustup`).
+* **Essential build tools (`build-essential`, `clang`, `librocksdb-dev` on Debian/Ubuntu).
 
 ### **Network Connection Details:**
 
