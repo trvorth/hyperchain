@@ -10,7 +10,7 @@ set -e # Exit immediately if a command exits with a non-zero status.
 
 # --- Configuration ---
 PROJECT_ID="hyperchain-testnet-462602"
-CONFIG_URL="https://gist.githubusercontent.com/trvorth/ba8aaef815a1ca9be84bf516f0cd1635/raw/0337d00f1b54fcd4be141b556e6598569626a0ec/config.testnet.toml"
+CONFIG_URL="https://gist.githubusercontent.com/trvorth/your-gist-id/raw/config.testnet.toml" # <-- IMPORTANT: SET YOUR GIST URL
 MACHINE_TYPE="e2-medium"
 REGION="us-central1"
 ZONE="us-central1-a"
@@ -41,11 +41,12 @@ gcloud compute instances create $INSTANCE_NAME \
     --machine-type=$MACHINE_TYPE \
     --image-family="ubuntu-2204-lts" \
     --image-project="ubuntu-os-cloud" \
+    --boot-disk-size=30GB \
     --tags="hyperchain-node" \
     --metadata-from-file=startup-script=./deployment/startup-script.sh \
     --metadata=config-url=${CONFIG_URL}
 
 echo "✅ Deployment of '$INSTANCE_NAME' initiated."
 echo "   It may take several minutes for the node to build and start."
-echo "   To check the status, SSH into the VM with: gcloud compute ssh $INSTANCE_NAME"
+echo "   To check the status, SSH into the VM with: gcloud compute ssh $INSTANCE_NAME --zone=$ZONE"
 echo "   Once inside, you can check the logs with 'tail -f /var/log/startup-script.log' or attach to the running node with 'screen -r hyperchain_node'"
