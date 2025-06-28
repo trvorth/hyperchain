@@ -22,9 +22,11 @@ CONFIG_URL=$(curl -H "Metadata-Flavor: Google" http://metadata.google.internal/c
 curl -L -o ./config.toml "${CONFIG_URL}"
 
 echo "--- [HyperChain Startup] Building HyperChain (this will take several minutes) ---"
-cargo build --release
+# Use the full path to cargo to avoid PATH issues
+$HOME/.cargo/bin/cargo build --release
 
 echo "--- [HyperChain Startup] Starting HyperChain node in a background screen session ---"
+# Use the full path to the compiled binary
 screen -dmS hyperchain_node ./target/release/start_node
 
 echo "✅ [HyperChain Startup] Script finished."
