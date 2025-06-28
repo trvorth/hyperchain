@@ -1,0 +1,23 @@
+# To get started with Dependabot version updates, you'll need to specify which
+# package ecosystems to update and where the package manifests are located.
+# Please see the documentation for all configuration options:
+# https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+
+version: 2
+updates:
+  - package-ecosystem: "rust" # Targets Rust dependencies as the repo is Rust-based
+    directory: "/" # Root directory where Cargo.toml is located
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "github-actions" # For GitHub Actions workflows if used
+    directory: "/" # Root directory for workflow files
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "npm" # For potential frontend or documentation tools
+    directory: "/docs" # Directory for documentation if npm is used
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "docker" # For potential Dockerfiles if used in dev/test
+    directory: "/" # Root directory for Dockerfile if present
+    schedule:
+      interval: "weekly"
