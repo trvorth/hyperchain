@@ -5,7 +5,7 @@
 
 version: 2
 updates:
-  - package-ecosystem: "rust" # Targets Rust dependencies as the repo is Rust-based
+  - package-ecosystem: "cargo" # Correct ecosystem for Rust using Cargo
     directory: "/" # Root directory where Cargo.toml is located
     schedule:
       interval: "weekly"
@@ -21,3 +21,4 @@ updates:
     directory: "/" # Root directory for Dockerfile if present
     schedule:
       interval: "weekly"
+```
