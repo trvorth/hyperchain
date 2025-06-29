@@ -1,0 +1,39 @@
+name: Feature Request
+description: Suggest a new feature for HyperChain.
+title: "[FEATURE] <title>"
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for suggesting a feature! Please provide details to help us evaluate it.
+  - type: input
+    id: contact
+    attributes:
+      label: Contact Details
+      description: How can we reach you if we need more information? (Optional)
+      placeholder: e.g., email or GitHub handle
+    validations:
+      required: false
+  - type: textarea
+    id: description
+    attributes:
+      label: Feature Description
+      description: A clear and concise description of the feature.
+      placeholder: What would you like to see added?
+    validations:
+      required: true
+  - type: textarea
+    id: rationale
+    attributes:
+      label: Rationale
+      description: Why is this feature important? Include use cases if possible.
+      placeholder: Explain the benefit to HyperChain or its users.
+    validations:
+      required: true
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Add any other context or screenshots about the feature request.
+

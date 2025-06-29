@@ -1,0 +1,62 @@
+name: Bug Report
+description: File a bug report to help us improve HyperChain.
+title: "[BUG] <title>"
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting an issue! Please provide as much detail as possible.
+  - type: input
+    id: contact
+    attributes:
+      label: Contact Details
+      description: How can we reach you if we need more information? (Optional)
+      placeholder: e.g., email or GitHub handle
+    validations:
+      required: false
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the Bug
+      description: A clear and concise description of what the bug is.
+      placeholder: Tell us what you expected vs. what happened.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: Steps to reproduce the behavior.
+      placeholder: |
+        1. Run `cargo run --bin start_node`
+        2. ...
+        3. See error
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or Output
+      description: Please copy and paste any relevant log output or error messages.
+      render: shell
+  - type: dropdown
+    id: component
+    attributes:
+      label: Affected Component
+      description: Which part of HyperChain is affected?
+      options:
+        - hyperdag.rs
+        - node.rs
+        - p2p.rs
+        - consensus.rs
+        - wallet.rs
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Add any other context about the problem here.
+
