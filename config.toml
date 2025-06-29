@@ -1,5 +1,5 @@
 p2p_address = "/ip4/0.0.0.0/tcp/8000"
-local_full_p2p_address = "/ip4/0.0.0.0/tcp/8000/p2p/12D3KooWCvdEKj7PpSMoJ49guewACXTqcwR1VZBFqhL4Hii5ahUL"
+local_full_p2p_address = "/ip4/0.0.0.0/tcp/8000/p2p/12D3KooWLyn5uPxjG4yEU9a9eTGD8rPFUAT3bgKNV977DwSErerp"
 api_address = "127.0.0.1:8080"
 network_id = "hyperdag-mainnet"
 peers = []
