@@ -58,6 +58,7 @@ node*/*.txt
 /private_key.txt
 /keypair.txt
 .env*
+/deployment/*.local.toml
 
 # --- Generated Project Files ---
 /header.tex
