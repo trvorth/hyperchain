@@ -10,7 +10,7 @@ set -e # Exit immediately if a command exits with a non-zero status.
 
 # --- Configuration ---
 PROJECT_ID="hyperchain-testnet-462602"
-CONFIG_URL="https://gist.githubusercontent.com/trvorth/your-gist-id/raw/config.testnet.toml" # <-- IMPORTANT: SET YOUR GIST URL
+CONFIG_URL="https://gist.githubusercontent.com/trvorth/f644d67b82df555f10303cac316fdf29/raw/8c2ebff9efb0e46efbeef28b4f95292207f7a692/config.testnet.toml" # <-- IMPORTANT: SET GIST URL
 MACHINE_TYPE="e2-medium"
 REGION="us-central1"
 ZONE="us-central1-a"
