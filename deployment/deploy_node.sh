@@ -1,10 +1,4 @@
-#!/bin/bash
-#
-# A script to deploy a HyperChain node to Google Cloud for the public testnet.
-#
-# Usage: ./deployment/deploy_node.sh [INSTANCE_NAME] [REGION] [ZONE]
-# Example (US):   ./deployment/deploy_node.sh hyperchain-seed-us us-central1 us-central1-a
-#
+
 
 set -e # Exit immediately if a command exits with a non-zero status.
 
