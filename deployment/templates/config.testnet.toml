@@ -11,9 +11,8 @@ p2p_port = 10333
 # A list of initial seed nodes to connect to for peer discovery.
 # This list will be populated with the public IP and Peer ID of your seed nodes.
 boot_nodes = [
-  "/ip4/34.135.104.180/tcp/10333/p2p/PEER_ID_FROM_SEED_1",
-  "/ip4/34.58.231.123/tcp/10333/p2p/PEER_ID_FROM_SEED_2",
-  "/ip4/34.172.74.32/tcp/10333/p2p/PEER_ID_FROM_SEED_3"
+  # Example: "/ip4/34.126.103.74/tcp/10333/p2p/12D3KooW..._PEER_ID_1",
+  # Example: "/ip4/104.197.0.155/tcp/10333/p2p/12D3KooW..._PEER_ID_2"
 ]
 
 # --- API Configuration ---
