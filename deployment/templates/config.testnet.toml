@@ -3,34 +3,26 @@
 # ===============================================================
 
 # --- P2P Networking ---
-# The IP address the libp2p swarm will listen on. "0.0.0.0" listens on all interfaces.
 p2p_address = "0.0.0.0"
-# The port for the libp2p swarm.
 p2p_port = 10333
-
-# A list of initial seed nodes to connect to for peer discovery.
-# This list will be populated with the public IP and Peer ID of your seed nodes.
 boot_nodes = [
-  # Example: "/ip4/34.126.103.74/tcp/10333/p2p/12D3KooW..._PEER_ID_1",
-  # Example: "/ip4/104.197.0.155/tcp/10333/p2p/12D3KooW..._PEER_ID_2"
+	"/ip4/35.184.73.89/tcp/10333/p2p/PEER_ID_FROM_SEED_US",
+	"/ip4/34.105.141.52/tcp/10333/p2p/PEER_ID_FROM_SEED_EU",
+	"/ip4/35.247.188.7/tcp/10333/p2p/PEER_ID_FROM_SEED_ASIA"
 ]
 
 # --- API Configuration ---
 # The address for the RPC/REST API server to listen on.
-rpc_address = "127.0.0.1"
+api_address = "127.0.0.1" # Corrected from rpc_address
 rpc_port = 9071
 
 # --- Node Operation ---
-# Database path for storing blockchain data.
 db_path = "./hyperchain_db"
 log_level = "info"
 
 # --- Consensus Parameters ---
-# The validator address for the genesis block.
 genesis_validator = "2119707c4caf16139cfb5c09c4dcc9bf9cfe6808b571c108d739f49cc14793b9"
 
 # --- Mining Configuration ---
-# Set to true to enable GPU mining (requires 'gpu' feature and OpenCL).
 use_gpu = false
-# The number of CPU threads to use for mining.
 mining_threads = 4
