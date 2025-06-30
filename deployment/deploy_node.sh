@@ -4,15 +4,15 @@
 #
 # Usage: ./deployment/deploy_node.sh [INSTANCE_NAME] [REGION] [ZONE]
 # Example (US):   ./deployment/deploy_node.sh hyperchain-seed-us us-central1 us-central1-a
-# Example (EU):   ./deployment/deploy_node.sh hyperchain-seed-eu europe-west2 europe-west2-b
-# Example (ASIA): ./deployment/deploy_node.sh hyperchain-seed-asia asia-southeast1 asia-southeast1-b
 #
 
 set -e # Exit immediately if a command exits with a non-zero status.
 
 # --- Configuration ---
 PROJECT_ID="hyperchain-testnet-462602"
-CONFIG_URL="https://gist.githubusercontent.com/trvorth/f644d67b82df555f10303cac316fdf29/raw/8c2ebff9efb0e46efbeef28b4f95292207f7a692/config.testnet.toml" # <-- IMPORTANT: SET GIST URL
+
+CONFIG_URL="https://gist.githubusercontent.com/trvorth/f644d67b82df555f10303cac316fdf29/raw/08eb5c24066ae9dbb7210b1ee8be76c763ebf70b/config.testnet.toml"
+
 MACHINE_TYPE="e2-medium"
 IMAGE_FAMILY="ubuntu-2204-lts"
 IMAGE_PROJECT="ubuntu-os-cloud"
@@ -33,7 +33,6 @@ ZONE=$3
 echo ">>> Setting active project to $PROJECT_ID"
 gcloud config set project $PROJECT_ID
 
-# Note: The firewall rule is global and only needs to be created once.
 if ! gcloud compute firewall-rules describe $FIREWALL_RULE_NAME --format="get(name)" &>/dev/null; then
     echo ">>> Creating firewall rule '$FIREWALL_RULE_NAME'..."
     gcloud compute firewall-rules create $FIREWALL_RULE_NAME --allow tcp:$P2P_PORT --description="Allow HyperChain P2P" --target-tags="hyperchain-node"
@@ -41,7 +40,6 @@ else
     echo ">>> Firewall rule '$FIREWALL_RULE_NAME' already exists."
 fi
 
-# --- VM Creation ---
 echo ">>> Creating VM instance: '$INSTANCE_NAME' in zone '$ZONE'..."
 gcloud compute instances create $INSTANCE_NAME \
     --zone=$ZONE \
@@ -57,5 +55,4 @@ EXTERNAL_IP=$(gcloud compute instances describe $INSTANCE_NAME --zone=$ZONE --fo
 
 echo "✅ Deployment of '$INSTANCE_NAME' initiated in '$ZONE'."
 echo "   Public IP Address: ${EXTERNAL_IP}"
-echo "   It may take some time for the node to build and start."
-echo "   To check the status, SSH into the VM with: gcloud compute ssh $INSTANCE_NAME --zone=$ZONE"
+echo "   To check status, SSH into the VM with: gcloud compute ssh $INSTANCE_NAME --zone=$ZONE"
