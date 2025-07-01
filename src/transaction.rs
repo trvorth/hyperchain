@@ -114,7 +114,7 @@ impl Transaction {
             &config.outputs,
             timestamp,
         )?;
-        
+
         let signature_obj = LatticeSignature::sign(config.signing_key_bytes, &signature_data)
             .map_err(|_| TransactionError::LatticeSignatureVerification)?;
 

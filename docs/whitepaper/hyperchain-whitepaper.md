@@ -263,7 +263,7 @@ The primary performance goal of HyperChain is to achieve high transactional thro
 
 Our development roadmap is structured to deliver value incrementally while ensuring the security and stability of the network at each stage.
 
-* **Q3 2024:**
+* **Q3 2025:**
 
   * \[x\] Whitepaper v1.0 Release
 
@@ -271,7 +271,7 @@ Our development roadmap is structured to deliver value incrementally while ensur
 
   * \[ \] Open-sourcing of the core codebase.
 
-* **Q4 2024:**
+* **Q4 2025:**
 
   * \[ \] Launch of the public, multi-node Testnet.
 
@@ -279,7 +279,7 @@ Our development roadmap is structured to deliver value incrementally while ensur
 
   * \[ \] Initiation of the first third-party security audit.
 
-* **Q1 2025:**
+* **Q1 2026:**
 
   * \[ \] Mainnet Launch Candidate.
 
@@ -287,7 +287,7 @@ Our development roadmap is structured to deliver value incrementally while ensur
 
   * \[ \] Bug bounty program initiated.
 
-* **Q2 2025 & Beyond:**
+* **Q2 2026 & Beyond:**
 
   * \[ \] Mainnet Launch.
 

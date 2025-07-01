@@ -194,10 +194,10 @@ impl Wallet {
         let ciphertext = cipher
             .encrypt(&nonce, plaintext.as_slice())
             .map_err(|e| WalletError::Encryption(e.to_string()))?;
-        
+
         let phc_string = password_hash.to_string();
         let phc_len = (phc_string.len() as u32).to_le_bytes();
-        
+
         let mut file_contents = Vec::new();
         file_contents.push(WALLET_FILE_VERSION);
         file_contents.extend_from_slice(&phc_len);

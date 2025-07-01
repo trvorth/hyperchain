@@ -634,7 +634,7 @@ impl P2PServer {
                 return;
             }
         };
-        
+
         match NetworkMessage::compute_hmac(&serialized_data_for_verification, &hmac_secret) {
             Ok(computed_hmac) if computed_hmac == msg_payload.hmac => {
                 debug!("HMAC verification passed for message from {source}");
@@ -647,7 +647,10 @@ impl P2PServer {
             }
         }
 
-        if !msg_payload.signature.verify(&serialized_data_for_verification) {
+        if !msg_payload
+            .signature
+            .verify(&serialized_data_for_verification)
+        {
             warn!("Lattice signature verification failed for message from peer {source}");
             context.blacklist.write().await.insert(source);
             PEERS_BLACKLISTED.inc();
