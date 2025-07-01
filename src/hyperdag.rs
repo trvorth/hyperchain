@@ -107,11 +107,10 @@ pub struct LatticeSignature {
 impl LatticeSignature {
     #[instrument]
     pub fn sign(signing_key_bytes: &[u8], message: &[u8]) -> Result<Self, HyperDAGError> {
-        let signing_key = SigningKey::from_bytes(
-            signing_key_bytes
-                .try_into()
-                .map_err(|_| HyperDAGError::InvalidBlock("Invalid signing key length".to_string()))?,
-        );
+        let signing_key =
+            SigningKey::from_bytes(signing_key_bytes.try_into().map_err(|_| {
+                HyperDAGError::InvalidBlock("Invalid signing key length".to_string())
+            })?);
         let public_key = signing_key.verifying_key();
         let signature = signing_key.sign(message);
 
@@ -123,10 +122,16 @@ impl LatticeSignature {
 
     #[instrument]
     pub fn verify(&self, message: &[u8]) -> bool {
-        let Ok(pk_bytes) = <&[u8; 32]>::try_from(self.public_key.as_slice()) else { return false; };
-        let Ok(verifying_key) = VerifyingKey::from_bytes(pk_bytes) else { return false; };
+        let Ok(pk_bytes) = <&[u8; 32]>::try_from(self.public_key.as_slice()) else {
+            return false;
+        };
+        let Ok(verifying_key) = VerifyingKey::from_bytes(pk_bytes) else {
+            return false;
+        };
 
-        let Ok(sig_bytes) = <&[u8; 64]>::try_from(self.signature.as_slice()) else { return false; };
+        let Ok(sig_bytes) = <&[u8; 64]>::try_from(self.signature.as_slice()) else {
+            return false;
+        };
         let signature = DalekSignature::from_bytes(sig_bytes);
 
         verifying_key.verify(message, &signature).is_ok()
@@ -281,7 +286,8 @@ impl HyperBlock {
         let id = hex::encode(Keccak256::digest(&pre_signature_data_for_id));
 
         let final_signature_payload = Self::serialize_for_signing(&signing_data)?;
-        let lattice_signature = LatticeSignature::sign(signing_key_material, &final_signature_payload)?;
+        let lattice_signature =
+            LatticeSignature::sign(signing_key_material, &final_signature_payload)?;
 
         let homomorphic_encrypted_data = transactions
             .iter()
@@ -637,8 +643,9 @@ impl HyperDAG {
             .map_err(HyperDAGError::EmissionError)?;
         let dev_fee = (reward as f64 * DEV_FEE_RATE) as u64;
         let miner_reward = reward.saturating_sub(dev_fee);
-        
-        let reward_tx_signature = LatticeSignature::sign(validator_signing_key, &now.to_be_bytes())?;
+
+        let reward_tx_signature =
+            LatticeSignature::sign(validator_signing_key, &now.to_be_bytes())?;
 
         let reward_outputs = vec![
             crate::transaction::Output {
@@ -756,10 +763,7 @@ impl HyperDAG {
             merkle_root: &block.merkle_root,
         };
         let signature_data = HyperBlock::serialize_for_signing(&signing_data)?;
-        if !block
-            .lattice_signature
-            .verify(&signature_data)
-        {
+        if !block.lattice_signature.verify(&signature_data) {
             return Err(HyperDAGError::LatticeSignatureVerification);
         }
 

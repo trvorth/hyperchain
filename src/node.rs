@@ -604,7 +604,7 @@ async fn publish_readiness_handler(
         is_ready,
         block_count: blocks_read_guard.len(),
         utxo_count: utxos_read_guard.len(),
-        peer_count: 0, 
+        peer_count: 0,
         mempool_size: mempool_read_guard.size().await,
         issues,
     }))

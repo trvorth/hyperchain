@@ -5,7 +5,7 @@ set -e # Exit immediately if a command exits with a non-zero status.
 # --- Configuration ---
 PROJECT_ID="hyperchain-testnet-462602"
 
-CONFIG_URL="https://gist.githubusercontent.com/trvorth/f644d67b82df555f10303cac316fdf29/raw/08eb5c24066ae9dbb7210b1ee8be76c763ebf70b/config.testnet.toml"
+CONFIG_URL="https://gist.githubusercontent.com/trvorth/f644d67b82df555f10303cac316fdf29/raw/93a4dfa3d0b8f0d57419f728280da48771df6a88/config.testnet.toml"
 
 MACHINE_TYPE="e2-medium"
 IMAGE_FAMILY="ubuntu-2204-lts"

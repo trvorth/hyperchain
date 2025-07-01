@@ -36,10 +36,12 @@ async fn main() -> anyhow::Result<()> {
     // Load the configuration.
     let config = Config::load(&args.config_path)
         .context(format!("Failed to load config from {}", &args.config_path))?;
-    
+
     // Initialize the logger.
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(&config.logging.level))
-        .init();
+    env_logger::Builder::from_env(
+        env_logger::Env::default().default_filter_or(&config.logging.level),
+    )
+    .init();
     info!("Starting HyperDAG node (from start_node.rs)...");
 
     // Load the wallet.
@@ -49,7 +51,7 @@ async fn main() -> anyhow::Result<()> {
             &args.wallet_path
         );
     }
-    
+
     let passphrase = rpassword::prompt_password("Enter passphrase to unlock wallet: ")?;
     let secret_passphrase = Secret::new(passphrase);
 
