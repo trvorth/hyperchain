@@ -21,7 +21,7 @@ While primarily a Layer-0 protocol facilitating interoperability across its ecos
 
 For a comprehensive academic and technical overview, please refer to the official [**HyperChain Whitepaper**](./hyperchain-whitepaper.pdf).
 
-## X-PHYRUS™ Protocol Stack
+## X-PHYRUS™ Protocol Stack 🪖
 
 The **X-PHYRUS™ Protocol Stack** is a military-grade, pre-boot initialization and system integrity framework integrated directly into the Hyperchain node. It ensures maximum security, stability, and operational readiness by running a suite of advanced diagnostics and activating specialized protocols before the main node services are launched. This proactive approach prevents common hangs, detects sophisticated threats, and configures the node for optimal performance in any environment. Key components will list below:
 
@@ -34,9 +34,9 @@ The **X-PHYRUS™ Protocol Stack** is a military-grade, pre-boot initialization 
 * **PhaseTrace™**: Verifies the database backend to enable a traceable block propagation graph for enhanced auditability.
 * **TraceForce-X™**: Activates a governance and compliance tracing stack when a `traceforce_watchlist.csv` file is present, ensuring regulatory adherence.
 
-## ΛΣ-ΩMEGA (Lambda Sigma Omega): Conscious Security Layer
+## ΛΣ-ΩMEGA™ 🔒
 
-A key innovation in Hyperchain is ΛΣ-ΩMEGA, a reflexive security module integrated directly into the node's core logic. It functions as a "digital immune system" by:
+A key innovation in Hyperchain is ΛΣ-ΩMEGA™ (Lambda Sigma Omega), Conscious Security Layer, a reflexive security module integrated directly into the node's core logic. It functions as a "digital immune system" by:
 
 1.  **Maintaining a Digital Identity**: Each node has a unique, evolving identity based on a constant stream of system entropy.
 2.  **Reflecting on Actions**: Before processing critical actions like transactions, the node reflects on the action by evolving its identity.
@@ -186,7 +186,7 @@ To see a simulation of the conscious security layer, run the `omega_test` binary
 
 ```bash
 cargo run --bin omega_test
-
+```
 ## **Testnet Participation**
 
 For details on joining the public testnet, including hardware requirements, incentive programs, and bootnode addresses, please refer to the [**Testnet Launch Plan**](./docs/testnet-plan.md).
