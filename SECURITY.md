@@ -6,13 +6,11 @@ HyperChain is committed to ensuring the long-term security of its heterogeneous,
 
 ## Supported Versions
 
-Use this section to tell people about which versions of your project are currently being supported with security updates.
-
 As HyperChain is in pre-release development, no versions are currently supported with security updates. Once the initial testnet is launched, we will publish a versioning scheme and designate supported versions in this section. Security updates will be provided for all active testnet and mainnet releases, with a deprecation process outlined prior to end-of-life for any version.
 
 ## Reporting a Vulnerability
 
-Use this section to tell people how to report a vulnerability. Tell them where to go, how often they can expect to get an update on a reported vulnerability, what to expect if the vulnerability is accepted or declined, etc.
+How to report a vulnerability, where to go, how often can expect to get an update on a reported vulnerability, what to expect if the vulnerability is accepted or declined, etc.
 
 ### Reporting Process
 HyperChain welcomes responsible disclosure of security vulnerabilities to strengthen the protocol. To report a vulnerability, please follow these steps:

@@ -1,29 +1,40 @@
 use clap::{Parser, Subcommand};
-use hyperchain::{config::Config, node::Node, wallet::Wallet};
+use hyperchain::{
+    config::{Config, ConfigError},
+    node::{Node, NodeError},
+    wallet::{Wallet, WalletError},
+    x_phyrus, 
+};
 use secrecy::SecretString;
 use std::env;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 use thiserror::Error;
-use tokio::signal;
+use tokio::task;
 use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
+
+pub mod omega;
 
 #[derive(Debug, Error)]
 enum CliError {
     #[error("Configuration error: {0}")]
-    Config(#[from] anyhow::Error),
+    Config(#[from] ConfigError),
     #[error("Node initialization failed: {0}")]
-    NodeInitialization(String),
-    #[error("Node runtime error: {0}")]
-    NodeRuntime(#[from] hyperchain::node::NodeError),
+    NodeInitialization(#[from] NodeError),
     #[error("Wallet operation failed: {0}")]
-    Wallet(String),
+    Wallet(#[from] WalletError),
     #[error("Environment variable error: {0}")]
     EnvVar(#[from] env::VarError),
     #[error("I/O error: {0}")]
     Io(#[from] io::Error),
+    #[error("Task join error: {0}")]
+    Join(#[from] task::JoinError),
+    #[error("{0}")]
+    Password(String),
+    #[error("X-PHYRUS Pre-boot check failed: {0}")]
+    XPPreBoot(#[from] anyhow::Error),
 }
 
 #[derive(Parser, Debug)]
@@ -40,10 +51,12 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// Manage encrypted wallets.
     Wallet {
         #[command(subcommand)]
         wallet_command: WalletCommands,
     },
+    /// Start the Hyperchain node.
     Start {
         #[arg(short, long, value_name = "FILE", default_value = "config.toml")]
         config: PathBuf,
@@ -54,6 +67,7 @@ enum Commands {
 
 #[derive(Subcommand, Debug)]
 enum WalletCommands {
+    /// Generate a new, securely encrypted wallet file.
     Generate {
         #[arg(short, long, value_name = "OUTPUT_FILE")]
         output: PathBuf,
@@ -64,76 +78,70 @@ enum WalletCommands {
 async fn main() -> Result<(), CliError> {
     dotenvy::dotenv().ok();
     let subscriber = FmtSubscriber::builder()
-        .with_env_filter(EnvFilter::from_default_env())
+        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
         .finish();
     tracing::subscriber::set_global_default(subscriber)
         .expect("Failed to set up logging subscriber.");
 
     info!("Hyperchain node starting up...");
     let cli = Cli::parse();
+
     match cli.command {
-        Commands::Wallet { wallet_command } => handle_wallet_command(wallet_command)?,
+        Commands::Wallet { wallet_command } => handle_wallet_command(wallet_command).await?,
         Commands::Start { config, wallet } => start_node(config, wallet).await?,
     }
+
     Ok(())
 }
 
-fn handle_wallet_command(command: WalletCommands) -> Result<(), CliError> {
+async fn handle_wallet_command(command: WalletCommands) -> Result<(), CliError> {
     match command {
         WalletCommands::Generate { output } => {
             info!("Generating a new encrypted wallet...");
             let password = prompt_for_password(true)?;
-            let new_wallet = Wallet::new().map_err(|e| CliError::Wallet(e.to_string()))?;
-            new_wallet
-                .save_to_file(&output, &password)
-                .map_err(|e| CliError::Wallet(e.to_string()))?;
+
+            info!("Encrypting and saving new wallet...");
+            let new_wallet = Wallet::new()?;
+
+            let output_clone = output.clone();
+            task::spawn_blocking(move || new_wallet.save_to_file(&output_clone, &password))
+                .await??;
+
             info!(
-                "Successfully generated and encrypted wallet at '{}'.",
+                "Wallet saved successfully to '{}'.",
                 output.display()
             );
-            Ok(())
         }
     }
+    Ok(())
 }
 
 async fn start_node(config_path: PathBuf, wallet_path: PathBuf) -> Result<(), CliError> {
     info!("Loading configuration from '{}'.", config_path.display());
-    let config = Config::load(&config_path.display().to_string()).map_err(anyhow::Error::from)?;
+    let config = Config::load(&config_path.display().to_string())?;
 
-    info!("Decrypting wallet from '{}'.", wallet_path.display());
+    // FIX: Await the now-asynchronous pre-boot sequence.
+    x_phyrus::initialize_pre_boot_sequence(&config, &wallet_path).await?;
+
     let password = prompt_for_password(false)?;
+    info!("Decrypting wallet (this may take a while)...");
+    let wallet_path_clone = wallet_path.clone();
     let wallet =
-        Wallet::from_file(&wallet_path, &password).map_err(|e| CliError::Wallet(e.to_string()))?;
+        task::spawn_blocking(move || Wallet::from_file(&wallet_path_clone, &password)).await??;
     info!("Wallet decrypted and loaded successfully.");
 
-    let config_path_str = config_path.display().to_string();
-    let wallet_arc = Arc::new(wallet);
-    let p2p_identity_path = "p2p_identity.key";
-    let peer_cache_path = "peer_cache.json";
-
+    info!("Initializing Hyperchain services...");
     let node = Node::new(
         config,
-        config_path_str,
-        wallet_arc,
-        p2p_identity_path,
-        peer_cache_path.to_string(),
+        config_path.display().to_string(),
+        Arc::new(wallet),
+        "p2p_identity.key",
+        "peer_cache.json".to_string(),
     )
-    .await
-    .map_err(|e| CliError::NodeInitialization(e.to_string()))?;
+    .await?;
+    info!("Node initialized. Starting main loop... (Press Ctrl+C for graceful shutdown)");
 
-    info!("Node initialized. Starting Hyperchain node... (Press Ctrl+C for graceful shutdown)");
-
-    tokio::select! {
-        res = node.start() => {
-            if let Err(e) = res {
-                error!("Node runtime error: {}", e);
-                return Err(CliError::NodeRuntime(e));
-            }
-        },
-        _ = signal::ctrl_c() => {
-            info!("Shutdown signal received. Initiating graceful shutdown...");
-        },
-    }
+    node.start().await?;
 
     info!("Hyperchain node has shut down.");
     Ok(())
@@ -149,7 +157,7 @@ fn prompt_for_password(confirm: bool) -> Result<SecretString, CliError> {
         io::stdout().flush()?;
         let confirmation = rpassword::read_password()?;
         if password != confirmation {
-            return Err(CliError::Wallet("Passwords do not match.".to_string()));
+            return Err(CliError::Password("Passwords do not match.".to_string()));
         }
     }
     Ok(SecretString::new(password))

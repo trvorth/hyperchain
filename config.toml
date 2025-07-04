@@ -1,11 +1,13 @@
 p2p_address = "/ip4/0.0.0.0/tcp/8000"
-local_full_p2p_address = "/ip4/0.0.0.0/tcp/8000/p2p/12D3KooWLyn5uPxjG4yEU9a9eTGD8rPFUAT3bgKNV977DwSErerp"
+local_full_p2p_address = "/ip4/0.0.0.0/tcp/8000/p2p/12D3KooWJXhhf8xDm8XH1CSBjLbemw7H384NQZwuexiRvqqFgZhC"
 api_address = "127.0.0.1:8080"
 network_id = "hyperdag-mainnet"
 peers = []
 genesis_validator = "2119707c4caf16139cfb5c09c4dcc9bf9cfe6808b571c108d739f49cc14793b9"
-target_block_time = 6000
-difficulty = 1000
+# FIX: Increased time to find a block
+target_block_time = 30000
+# FIX: Lowered difficulty to make mining possible
+difficulty = 10
 max_amount = 10000000000
 use_gpu = false
 zk_enabled = false
@@ -14,7 +16,7 @@ num_chains = 2
 mining_chain_id = 0
 
 [logging]
-level = "info"
+level = "debug"
 
 [p2p]
 heartbeat_interval = 500

@@ -2,6 +2,7 @@ use crate::config::{Config, ConfigError};
 use crate::hyperdag::{HyperBlock, HyperDAG};
 use crate::mempool::Mempool;
 use crate::miner::{Miner, MinerConfig, MiningError};
+use crate::omega::reflect_on_action;
 use crate::p2p::{P2PCommand, P2PConfig, P2PError, P2PServer};
 use crate::transaction::{Transaction, UTXO};
 use crate::wallet::Wallet;
@@ -19,22 +20,22 @@ use governor::state::{InMemoryState, NotKeyed};
 use governor::{Quota, RateLimiter};
 use libp2p::identity;
 use libp2p::PeerId;
-use log::{debug, error, info, warn};
 use nonzero_ext::nonzero;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use sp_core::H256;
 use std::collections::HashMap;
-use std::fs;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
+use tokio::fs;
 use tokio::signal;
 use tokio::sync::{mpsc, RwLock};
-use tokio::task::JoinSet;
-use tokio::time::{self, Instant};
-use tracing::instrument;
+use tokio::task::{JoinError, JoinSet};
+use tokio::time::{self, timeout};
+use tracing::{debug, error, info, instrument, warn};
 
 const MAX_UTXOS: usize = 1_000_000;
 const MAX_PROPOSALS: usize = 10_000;
@@ -61,7 +62,7 @@ pub enum NodeError {
     #[error("Server execution error: {0}")]
     ServerExecution(String),
     #[error("Task join error: {0}")]
-    Join(#[from] tokio::task::JoinError),
+    Join(#[from] JoinError),
     #[error("P2P specific error: {0}")]
     P2PSpecific(#[from] P2PError),
     #[error("P2P Identity error: {0}")]
@@ -105,7 +106,7 @@ pub struct Node {
     pub mempool: Arc<RwLock<Mempool>>,
     pub utxos: Arc<RwLock<HashMap<String, UTXO>>>,
     pub proposals: Arc<RwLock<Vec<HyperBlock>>>,
-    _mining_chain_id: u32,
+    mining_chain_id: u32,
     peer_cache_path: String,
 }
 
@@ -122,7 +123,7 @@ impl Node {
     ) -> Result<Self, NodeError> {
         config.validate()?;
 
-        let local_keypair = match fs::read(p2p_identity_path) {
+        let local_keypair = match fs::read(p2p_identity_path).await {
             Ok(key_bytes) => {
                 info!("Loading P2P identity from file: {p2p_identity_path}");
                 identity::Keypair::from_protobuf_encoding(&key_bytes).map_err(|e| {
@@ -130,19 +131,15 @@ impl Node {
                 })
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                info!(
-                    "P2P identity key file not found at {p2p_identity_path}, generating a new one."
-                );
+                info!("P2P identity key file not found at {p2p_identity_path}, generating a new one.");
                 if let Some(p) = Path::new(p2p_identity_path).parent() {
-                    fs::create_dir_all(p)?;
+                    fs::create_dir_all(p).await?;
                 }
                 let new_key = identity::Keypair::generate_ed25519();
-                fs::write(
-                    p2p_identity_path,
-                    new_key.to_protobuf_encoding().map_err(|e| {
-                        NodeError::P2PIdentity(format!("Failed to encode P2P key: {e:?}"))
-                    })?,
-                )?;
+                let new_key_bytes = new_key
+                    .to_protobuf_encoding()
+                    .map_err(|e| NodeError::P2PIdentity(format!("Failed to encode P2P key: {e:?}")))?;
+                fs::write(p2p_identity_path, new_key_bytes).await?;
                 info!("New P2P identity key saved to {p2p_identity_path}");
                 Ok(new_key)
             }
@@ -152,7 +149,7 @@ impl Node {
         }?;
 
         let local_peer_id = PeerId::from(local_keypair.public());
-        info!("Node Local P2P Peer ID: {}", local_peer_id);
+        info!("Node Local P2P Peer ID: {local_peer_id}");
 
         let full_local_p2p_address = format!("{}/p2p/{}", config.p2p_address, local_peer_id);
 
@@ -172,6 +169,7 @@ impl Node {
         let signing_key_dalek = wallet.get_signing_key()?;
         let node_signing_key_bytes = signing_key_dalek.to_bytes().to_vec();
 
+        info!("Initializing HyperDAG (loading database)...");
         let dag = Arc::new(RwLock::new(
             HyperDAG::new(
                 &initial_validator,
@@ -183,6 +181,7 @@ impl Node {
             .await
             .map_err(|e| NodeError::DAG(e.to_string()))?,
         ));
+        info!("HyperDAG initialized.");
 
         let mempool = Arc::new(RwLock::new(Mempool::new(3600, 10_000_000, 10_000)));
         let utxos = Arc::new(RwLock::new(HashMap::with_capacity(MAX_UTXOS)));
@@ -210,7 +209,6 @@ impl Node {
         let miner_config = MinerConfig {
             address: wallet.address(),
             dag: dag.clone(),
-            mempool: mempool.clone(),
             difficulty_hex: format!("{:x}", config.difficulty),
             target_block_time: config.target_block_time,
             use_gpu: config.use_gpu,
@@ -220,11 +218,6 @@ impl Node {
         };
         let miner_instance = Miner::new(miner_config)?;
         let miner = Arc::new(miner_instance);
-
-        info!(
-            "Node initialized: Configured P2P Address Base={}, API Address={}, Chains={}",
-            config.p2p_address, config.api_address, config.num_chains
-        );
 
         Ok(Self {
             _config_path: config_path,
@@ -236,7 +229,7 @@ impl Node {
             mempool,
             utxos,
             proposals,
-            _mining_chain_id: config.mining_chain_id,
+            mining_chain_id: config.mining_chain_id,
             peer_cache_path,
         })
     }
@@ -246,63 +239,71 @@ impl Node {
     }
 
     pub async fn start(&self) -> Result<(), NodeError> {
-        let (tx_p2p_commands, rx_p2p_commands_for_p2p_task) = mpsc::channel::<P2PCommand>(100);
+        let (tx_p2p_commands, rx_p2p_commands) = mpsc::channel::<P2PCommand>(100);
         let mut join_set: JoinSet<Result<(), NodeError>> = JoinSet::new();
 
-        info!("Initializing P2P server task for the Node.");
-        let p2p_dag_clone = self.dag.clone();
-        let p2p_mempool_clone = self.mempool.clone();
-        let p2p_utxos_clone = self.utxos.clone();
-        let p2p_proposals_clone = self.proposals.clone();
-        let p2p_command_sender_clone = tx_p2p_commands.clone();
+        if !self.config.peers.is_empty() {
+            info!("Peers detected in config, initializing P2P server task...");
+            let p2p_dag_clone = self.dag.clone();
+            let p2p_mempool_clone = self.mempool.clone();
+            let p2p_utxos_clone = self.utxos.clone();
+            let p2p_proposals_clone = self.proposals.clone();
+            let p2p_command_sender_clone = tx_p2p_commands.clone();
+            let p2p_identity_keypair_clone = self.p2p_identity_keypair.clone();
+            let p2p_listen_address_config_clone = self.config.p2p_address.clone();
+            let p2p_initial_peers_config_clone = self.config.peers.clone();
+            let node_signing_key_bytes_for_p2p = self.wallet.get_signing_key()?.to_bytes().to_vec();
+            let peer_cache_path_clone = self.peer_cache_path.clone();
+            let network_id_clone = self.config.network_id.clone();
 
-        let p2p_identity_keypair_clone = self.p2p_identity_keypair.clone();
-        let p2p_listen_address_config_clone = self.config.p2p_address.clone();
-        let p2p_initial_peers_config_clone = self.config.peers.clone();
-        let node_signing_key_bytes_for_p2p = self.wallet.get_signing_key()?.to_bytes().to_vec();
-        let peer_cache_path_clone = self.peer_cache_path.clone();
-        let network_id_clone = self.config.network_id.clone();
-
-        let p2p_task_fut = async move {
-            let current_rx = rx_p2p_commands_for_p2p_task;
-            loop {
-                let p2p_config = P2PConfig {
-                    topic_prefix: &network_id_clone,
-                    listen_addresses: vec![p2p_listen_address_config_clone.clone()],
-                    initial_peers: p2p_initial_peers_config_clone.clone(),
-                    dag: p2p_dag_clone.clone(),
-                    mempool: p2p_mempool_clone.clone(),
-                    utxos: p2p_utxos_clone.clone(),
-                    proposals: p2p_proposals_clone.clone(),
-                    local_keypair: p2p_identity_keypair_clone.clone(),
-                    node_signing_key_material: &node_signing_key_bytes_for_p2p,
-                    peer_cache_path: peer_cache_path_clone.clone(),
-                };
-                match P2PServer::new(p2p_config).await {
-                    Ok(mut p2p_server) => {
-                        if !p2p_initial_peers_config_clone.is_empty() {
-                            if let Err(e) = p2p_command_sender_clone
-                                .send(P2PCommand::RequestState)
-                                .await
-                            {
-                                error!("Failed to send initial RequestState P2P command: {e}");
-                            }
+            let p2p_task_fut = async move {
+                let mut p2p_server = loop {
+                    let p2p_config = P2PConfig {
+                        topic_prefix: &network_id_clone,
+                        listen_addresses: vec![p2p_listen_address_config_clone.clone()],
+                        initial_peers: p2p_initial_peers_config_clone.clone(),
+                        dag: p2p_dag_clone.clone(),
+                        mempool: p2p_mempool_clone.clone(),
+                        utxos: p2p_utxos_clone.clone(),
+                        proposals: p2p_proposals_clone.clone(),
+                        local_keypair: p2p_identity_keypair_clone.clone(),
+                        node_signing_key_material: &node_signing_key_bytes_for_p2p,
+                        peer_cache_path: peer_cache_path_clone.clone(),
+                    };
+                    info!("Attempting to initialize P2P server...");
+                    match timeout(Duration::from_secs(15), P2PServer::new(p2p_config)).await {
+                        Ok(Ok(server)) => {
+                            info!("P2P server initialized successfully.");
+                            break server;
                         }
-                        if let Err(e) = p2p_server.run(current_rx).await {
-                            error!("Node's internal P2P server run error: {e}. Node will attempt to restart P2P server.");
-                            return Err(NodeError::P2PSpecific(e));
+                        Ok(Err(e)) => {
+                            warn!("P2P server failed to initialize: {e}. Retrying in 5 seconds...");
                         }
-                        info!("Node's internal P2P server task finished cleanly.");
-                        return Ok(());
+                        Err(_) => {
+                            warn!("P2P server initialization timed out. Retrying in 5 seconds...");
+                        }
                     }
-                    Err(e) => {
-                        warn!("Node's internal P2P server creation failed: {e}. Retrying in 5 seconds...");
-                        time::sleep(Duration::from_secs(5)).await;
+                    time::sleep(Duration::from_secs(5)).await;
+                };
+
+                if !p2p_initial_peers_config_clone.is_empty() {
+                    if let Err(e) = p2p_command_sender_clone
+                        .send(P2PCommand::RequestState)
+                        .await
+                    {
+                        error!("Failed to send initial RequestState P2P command: {e}");
                     }
                 }
-            }
-        };
-        join_set.spawn(p2p_task_fut);
+
+                p2p_server
+                    .run(rx_p2p_commands)
+                    .await
+                    .map_err(NodeError::P2PSpecific)
+            };
+            join_set.spawn(p2p_task_fut);
+        } else {
+            info!("No peers found in config, skipping P2P server initialization. Running in single-node mode.");
+        }
 
         let mining_task_fut = {
             let miner_clone = self.miner.clone();
@@ -313,112 +314,61 @@ impl Node {
             let peers_present = !self.config.peers.is_empty();
             let proposals_clone_miner = self.proposals.clone();
             let wallet_clone_miner = self.wallet.clone();
+            let mining_chain_id = self.mining_chain_id;
             async move {
-                let mut last_aggregation = Instant::now();
                 loop {
-                    {
-                        let guard = mempool_clone_miner.write().await;
-                        guard.prune_expired().await;
-                    }
-                    match miner_clone.mine(&utxos_clone_miner).await {
+                    debug!("MINING_LOOP_START: Preparing to mine a new block.");
+                    
+                    mempool_clone_miner.write().await.prune_expired().await;
+                    debug!("MINING_LOOP_STEP_1: Mempool pruned.");
+
+                    let (tips, transactions, signing_key_bytes) = {
+                        let dag_read = dag_clone_miner.read().await;
+                        let tips = dag_read.get_tips(mining_chain_id).await.unwrap_or_default();
+                        
+                        let mempool_read = mempool_clone_miner.read().await;
+                        let utxos_read = utxos_clone_miner.read().await;
+                        let transactions = mempool_read.select_transactions(&dag_read, &utxos_read, crate::hyperdag::MAX_TRANSACTIONS_PER_BLOCK).await;
+                        
+                        let signing_key = wallet_clone_miner.get_signing_key()?;
+                        (tips, transactions, signing_key.to_bytes())
+                    };
+                    debug!("MINING_LOOP_STEP_2: Data for mining gathered ({} tips, {} txs).", tips.len(), transactions.len());
+
+                    let mining_result = {
+                        let miner_instance = miner_clone.clone();
+                        tokio::task::spawn_blocking(move || {
+                            miner_instance.mine(mining_chain_id, tips, transactions, &signing_key_bytes)
+                        }).await?
+                    };
+
+                    debug!("MINING_LOOP_STEP_3: Mining attempt finished.");
+
+                    match mining_result {
                         Ok(Some(block)) => {
-                            info!("Block mined: hash={}", block.id);
-                            let wallet_address = wallet_clone_miner.address();
-                            let balance = {
-                                let utxos_read_guard = utxos_clone_miner.read().await;
-                                utxos_read_guard
-                                    .iter()
-                                    .filter(|(_, utxo)| utxo.address == wallet_address)
-                                    .map(|(_, utxo)| utxo.amount)
-                                    .sum::<u64>()
-                            };
-                            info!("Wallet balance: address={wallet_address}, balance={balance}");
+                            info!("{block}");
+                            
+                            let mut proposals_guard = proposals_clone_miner.write().await;
+                            if proposals_guard.len() >= MAX_PROPOSALS && !proposals_guard.is_empty() {
+                                proposals_guard.remove(0);
+                            }
+                            proposals_guard.push(block.clone());
 
-                            let proposals_result = time::timeout(
-                                Duration::from_secs(2),
-                                proposals_clone_miner.write(),
-                            )
-                            .await;
-                            if let Ok(mut proposals_guard) = proposals_result {
-                                if proposals_guard.len() >= MAX_PROPOSALS
-                                    && !proposals_guard.is_empty()
-                                {
-                                    proposals_guard.remove(0);
+                            if peers_present {
+                                if let Err(e_send) = mining_tx_channel.try_send(P2PCommand::BroadcastBlock(block)) {
+                                    debug!("Failed to send mined block to P2P channel (channel may be full): {e_send}");
                                 }
-                                proposals_guard.push(block.clone());
-                                if peers_present {
-                                    if let Err(e_send) = mining_tx_channel
-                                        .try_send(P2PCommand::BroadcastBlock(block))
-                                    {
-                                        debug!(
-                                            "Failed to send mined block to P2P channel: {e_send}"
-                                        );
-                                    }
-                                } else {
-                                    let mut dag_write_guard = dag_clone_miner.write().await;
-                                    if let Err(e) =
-                                        dag_write_guard.add_block(block, &utxos_clone_miner).await
-                                    {
-                                        warn!("Failed to add self-mined block in single-node mode: {e}");
-                                    } else {
-                                        info!("Added self-mined block to DAG in single-node mode.");
-                                    }
+                            } else {
+                                let mut dag_write_guard = dag_clone_miner.write().await;
+                                if let Err(e) = dag_write_guard.add_block(block, &utxos_clone_miner).await {
+                                    warn!("Failed to add self-mined block in single-node mode: {e}");
                                 }
-                            } else if let Err(_timeout_err) = proposals_result {
-                                error!("Mining loop proposals lock timeout on mined block");
                             }
                         }
-                        Ok(None) => debug!("No block mined in this round"),
-                        Err(e) => {
-                            error!("Mining error: {e:?}");
-                        }
+                        Ok(None) => info!("Mining attempt concluded without finding a block. Retrying..."),
+                        Err(e) => error!("An error occurred during mining: {e:?}"),
                     }
-
-                    if last_aggregation.elapsed() >= Duration::from_secs(5) {
-                        let proposals_result =
-                            time::timeout(Duration::from_secs(2), proposals_clone_miner.write())
-                                .await;
-                        if let Ok(mut proposals_guard) = proposals_result {
-                            if !proposals_guard.is_empty() {
-                                let aggregated_block_result = {
-                                    let dag_read_guard = dag_clone_miner.read().await;
-                                    dag_read_guard
-                                        .aggregate_blocks(
-                                            proposals_guard.clone(),
-                                            &utxos_clone_miner,
-                                        )
-                                        .await
-                                };
-                                if let Ok(Some(block_to_add)) = aggregated_block_result {
-                                    let mut dag_write_guard = dag_clone_miner.write().await;
-                                    if dag_write_guard
-                                        .add_block(block_to_add.clone(), &utxos_clone_miner)
-                                        .await
-                                        .unwrap_or(false)
-                                    {
-                                        info!("Added aggregated block {} to DAG", block_to_add.id);
-                                        if peers_present {
-                                            if let Err(e_send) = mining_tx_channel
-                                                .try_send(P2PCommand::BroadcastBlock(block_to_add))
-                                            {
-                                                debug!("Failed to send aggregated block to P2P channel: {e_send}");
-                                            }
-                                        }
-                                    }
-                                    proposals_guard.clear();
-                                } else if let Err(e) = aggregated_block_result {
-                                    error!("Error during block aggregation: {e:?}");
-                                }
-                            }
-                        } else if let Err(_timeout_err) = proposals_result {
-                            error!("Mining loop proposals lock error on aggregation");
-                        }
-                        last_aggregation = Instant::now();
-                    }
-
-                    if let Err(e) = dag_clone_miner.read().await.adjust_difficulty().await {
-                        error!("Failed to adjust difficulty: {e:?}");
-                    }
+                    
                     time::sleep(Duration::from_millis(500)).await;
                 }
             }
@@ -466,9 +416,14 @@ impl Node {
                 let addr: SocketAddr = app_state.api_address.parse().map_err(|e| {
                     NodeError::Config(ConfigError::Validation(format!("Invalid API address: {e}")))
                 })?;
-                info!("API server starting on {addr}");
 
-                if let Err(e) = axum_server::bind(addr).serve(app.into_make_service()).await {
+                let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| {
+                    NodeError::ServerExecution(format!("Failed to bind to API address {addr}: {e}"))
+                })?;
+
+                info!("API server listening on {}", listener.local_addr().unwrap());
+
+                if let Err(e) = axum::serve(listener, app.into_make_service()).await {
                     error!("API server failed: {e}");
                     return Err(NodeError::ServerExecution(format!(
                         "API server failed: {e}"
@@ -479,10 +434,7 @@ impl Node {
             }
         };
 
-        let mining_task_wrapper = async move {
-            mining_task_fut.await;
-            Ok(())
-        };
+        let mining_task_wrapper = mining_task_fut;
         join_set.spawn(mining_task_wrapper);
         join_set.spawn(server_task_fut);
 
@@ -648,6 +600,24 @@ async fn submit_transaction(
     State(state): State<AppState>,
     Json(tx_data): Json<Transaction>,
 ) -> Result<Json<String>, StatusCode> {
+    let tx_hash_bytes = match hex::decode(&tx_data.id) {
+        Ok(bytes) => bytes,
+        Err(_) => return Err(StatusCode::BAD_REQUEST),
+    };
+    let tx_hash = H256::from_slice(&tx_hash_bytes);
+
+    if !reflect_on_action(tx_hash).await {
+        error!(
+            "ΛΣ-ΩMEGA Reflex Rejection: Transaction {} halted due to unstable system state.",
+            tx_data.id
+        );
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+    info!(
+        "ΛΣ-ΩMEGA Passed: Transaction {} approved for processing.",
+        tx_data.id
+    );
+
     if !Regex::new(ADDRESS_REGEX).unwrap().is_match(&tx_data.sender)
         || !Regex::new(ADDRESS_REGEX)
             .unwrap()
@@ -671,7 +641,11 @@ async fn submit_transaction(
     let utxos_read_guard = state.utxos.read().await;
     let dag_read_guard = state.dag.read().await;
 
-    if tx_data.verify(&state.dag, &state.utxos).await.is_err() {
+    if tx_data
+        .verify(&dag_read_guard, &utxos_read_guard)
+        .await
+        .is_err()
+    {
         warn!(
             "Transaction {} failed full verification via API",
             tx_data.id
@@ -739,20 +713,20 @@ async fn health_check() -> Result<Json<serde_json::Value>, StatusCode> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Config, LoggingConfig, P2pConfig};
+    use crate::config::{LoggingConfig, P2pConfig};
+    use crate::wallet::Wallet;
     use rand::Rng;
     use serial_test::serial;
     use std::fs as std_fs;
-    use std::sync::Arc;
 
     #[tokio::test]
     #[serial]
     async fn test_node_creation_and_config_save() {
-        if std::path::Path::new("hyperdag_db").exists() {
-            std::fs::remove_dir_all("hyperdag_db").unwrap();
+        if std::path::Path::new("hyperdag_db_test_node_creation").exists() {
+            std::fs::remove_dir_all("hyperdag_db_test_node_creation").unwrap();
         }
 
-        let _ = env_logger::try_init();
+        let _ = tracing_subscriber::fmt::try_init();
         let wallet = Wallet::new().expect("Failed to create new wallet for test");
         let wallet_arc = Arc::new(wallet);
         let genesis_validator_addr = wallet_arc.address();
@@ -821,7 +795,7 @@ mod tests {
             .p2p_address
             .contains("/ip4/127.0.0.1/tcp/"));
         assert!(node_instance.config.api_address.contains("127.0.0.1:"));
-        assert_eq!(node_instance._mining_chain_id, 0);
+        assert_eq!(node_instance.mining_chain_id, 0);
 
         let utxos_guard = node_instance.utxos.read().await;
         assert_eq!(utxos_guard.len(), 1);

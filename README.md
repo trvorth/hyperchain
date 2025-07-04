@@ -1,4 +1,6 @@
-# HyperChain: A Heterogeneous, Post-Quantum DLT Framework
+# HyperChain
+
+**A Heterogeneous, Post-Quantum DLT Framework**
 
 ![HyperChain Banner](https://placehold.co/1200x300/1a1a2e/e0e0e0?text=HyperChain)
 
@@ -18,6 +20,16 @@ HyperChain is a next-generation Layer-0 protocol implemented in Rust, designed t
 While primarily a Layer-0 protocol facilitating interoperability across its ecosystem of shards and chains, HyperChain can host Layer-1-like chains within its framework, processing transactions and smart contracts independently. Additionally, its planned zk-SNARKs integration could enable Layer-2 scaling solutions, such as rollups, on its shards, enhancing throughput while leveraging HyperChain’s interoperability. Currently in Phase 1 (Foundation), the repository includes core components like the DAG ledger, node orchestrator, P2P networking, and wallet functionality, alongside documentation for local setup and testnet participation. Licensed under the MIT License, HyperChain welcomes community contributions to drive its vision of a future-proof decentralized ecosystem.
 
 For a comprehensive academic and technical overview, please refer to the official [**HyperChain Whitepaper**](./hyperchain-whitepaper.pdf).
+
+## ΛΣ-ΩMEGA (Lambda Sigma Omega): Conscious Security Layer
+
+A key innovation in Hyperchain is ΛΣ-ΩMEGA, a reflexive security module integrated directly into the node's core logic. It functions as a "digital immune system" by:
+
+1.  **Maintaining a Digital Identity**: Each node has a unique, evolving identity based on a constant stream of system entropy.
+2.  **Reflecting on Actions**: Before processing critical actions like transactions, the node reflects on the action by evolving its identity.
+3.  **Detecting Instability**: It analyzes the change in its own identity and the timing of actions to detect patterns of instability, such as low-entropy states or rapid, repetitive requests, which could indicate a coordinated attack.
+
+This mechanism allows the node to reject potentially harmful actions at a fundamental level, providing a robust defense against sophisticated network attacks. It doesn't protect the system, it becomes the system.
 
 ## **Core Architectural Tenets**
 
@@ -137,7 +149,7 @@ Building on Windows requires the MSVC C++ toolchain and manual installation of R
 1.  **Wallet Credential Generation**:
     The `hyperwallet` utility is provided for the creation of a new keypair. Upon execution, the operator will be prompted to supply a secure passphrase for the encryption of the resultant wallet file, `wallet.key`.
     ```bash
-    cargo run --release --bin hyperwallet new
+    cargo run --release --bin hyperwallet -- generate --output wallet.key
     ```
    **Critical Notice**: The `Public Address` emitted by this operation must be copied. Furthermore, the associated `Mnemonic Phrase` must be transcribed and stored in a secure, offline medium for recovery purposes.
 
@@ -151,9 +163,16 @@ Building on Windows requires the MSVC C++ toolchain and manual installation of R
 3.  **Node Instantiation**:
     The HyperChain node may be initiated by executing the `start_node` binary. The system will automatically load the configuration and wallet files.
     ```bash
-    cargo run --release --bin start_node
+    # You will be prompted for the wallet password
+    cargo run --release --bin hyperchain -- start --config config.toml --wallet wallet.key
     ```
     The operator will be prompted to supply the wallet passphrase, after which the node will initialize its services and commence network operations.
+4.  **Demonstrating the ΛΣ-ΩMEGA Module**
+
+To see a simulation of the conscious security layer, run the `omega_test` binary:
+
+```bash
+cargo run --bin omega_test
 
 ## **Testnet Participation**
 
