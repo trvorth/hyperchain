@@ -23,9 +23,7 @@ For a comprehensive academic and technical overview, please refer to the officia
 
 ## X-PHYRUS™ Protocol Stack
 
-The **X-PHYRUS™ Protocol Stack** is a military-grade, pre-boot initialization and system integrity framework integrated directly into the Hyperchain node. It ensures maximum security, stability, and operational readiness by running a suite of advanced diagnostics and activating specialized protocols before the main node services are launched. This proactive approach prevents common hangs, detects sophisticated threats, and configures the node for optimal performance in any environment.
-
-### Key Components
+The **X-PHYRUS™ Protocol Stack** is a military-grade, pre-boot initialization and system integrity framework integrated directly into the Hyperchain node. It ensures maximum security, stability, and operational readiness by running a suite of advanced diagnostics and activating specialized protocols before the main node services are launched. This proactive approach prevents common hangs, detects sophisticated threats, and configures the node for optimal performance in any environment. Key components will list below:
 
 * **Zero-Hang™ Bootloader**: Performs critical pre-flight checks on system entropy, file permissions, and chain state integrity to eliminate common startup hangs.
 * **DeepCore Sentinel™**: Conducts an initial system security scan to detect known Advanced Persistent Threat (APT) toolchains and other high-risk system vulnerabilities.
