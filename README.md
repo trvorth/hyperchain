@@ -21,6 +21,21 @@ While primarily a Layer-0 protocol facilitating interoperability across its ecos
 
 For a comprehensive academic and technical overview, please refer to the official [**HyperChain Whitepaper**](./hyperchain-whitepaper.pdf).
 
+## X-PHYRUS™ Protocol Stack
+
+The **X-PHYRUS™ Protocol Stack** is a military-grade, pre-boot initialization and system integrity framework integrated directly into the Hyperchain node. It ensures maximum security, stability, and operational readiness by running a suite of advanced diagnostics and activating specialized protocols before the main node services are launched. This proactive approach prevents common hangs, detects sophisticated threats, and configures the node for optimal performance in any environment.
+
+### Key Components
+
+* **Zero-Hang™ Bootloader**: Performs critical pre-flight checks on system entropy, file permissions, and chain state integrity to eliminate common startup hangs.
+* **DeepCore Sentinel™**: Conducts an initial system security scan to detect known Advanced Persistent Threat (APT) toolchains and other high-risk system vulnerabilities.
+* **HydraDeploy™**: Automatically detects multi-node deployment manifests (`hydra_manifest.toml`) to activate specialized coordination and scaling logic.
+* **PeerFlash™**: Activates an advanced peer discovery overlay when a priority peer list is provided in the configuration, ensuring robust network connectivity.
+* **QuantumShield™**: Engages enhanced cryptographic validation protocols when ZK-proofs are enabled, providing a firewall layer against quantum computing threats.
+* **CloudAnchor™**: Detects cloud provider environments (AWS, GCP, Azure) to enable cloud-native elastic mining and scaling capabilities.
+* **PhaseTrace™**: Verifies the database backend to enable a traceable block propagation graph for enhanced auditability.
+* **TraceForce-X™**: Activates a governance and compliance tracing stack when a `traceforce_watchlist.csv` file is present, ensuring regulatory adherence.
+
 ## ΛΣ-ΩMEGA (Lambda Sigma Omega): Conscious Security Layer
 
 A key innovation in Hyperchain is ΛΣ-ΩMEGA, a reflexive security module integrated directly into the node's core logic. It functions as a "digital immune system" by:
