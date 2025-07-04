@@ -65,7 +65,7 @@ impl Consensus {
                 return Err(ConsensusError::InvalidTransactionSize);
             }
             let utxos_read_guard = utxos.read().await;
-            if !dag.validate_transaction(tx, &utxos_read_guard) {
+            if !dag.validate_transaction(tx, &utxos_read_guard).await {
                 return Err(ConsensusError::InvalidTransaction);
             }
         }

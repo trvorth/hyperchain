@@ -5,12 +5,16 @@
 # --- Binaries & Compiled Artifacts ---
 *.exe
 *.dll
+*.rlib
 *.so
 *.dylib
 *.test
 *.out
 *.o
 *.a
+*.ll
+*.bc
+
 /target/
 /bin/
 /pkg/
@@ -38,6 +42,7 @@ Thumbs.db
 *.bak
 *.tmp
 *temp*
+*~
 
 # --- Logs & Databases ---
 *.log
@@ -49,6 +54,13 @@ Thumbs.db
 # Ignore wallet keys, private keys, and environment files by default.
 # Use specific names for committed templates, e.g., 'wallet.key.example'.
 *.key
+*.keys
+*.keystore
+*.wal
+.wallet
+.json
+p2p_identity.key
+/deployment/.local.toml
 wallet.key
 private_key.txt
 keypair.txt

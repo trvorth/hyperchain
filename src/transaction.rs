@@ -1,7 +1,9 @@
 use crate::hyperdag::{HomomorphicEncrypted, HyperDAG, LatticeSignature};
+use crate::omega;
 use hex;
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak512};
+use sp_core::H256;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -16,6 +18,8 @@ const MAX_TRANSACTIONS_PER_MINUTE: u64 = 1000;
 
 #[derive(Error, Debug)]
 pub enum TransactionError {
+    #[error("ΛΣ-ΩMEGA Protocol rejected the action as unstable")]
+    OmegaRejection,
     #[error("Invalid address format")]
     InvalidAddress,
     #[error("Lattice signature verification failed")]
@@ -64,7 +68,6 @@ pub struct UTXO {
     pub explorer_link: String,
 }
 
-// Struct to hold configuration for a new Transaction
 #[derive(Debug)]
 pub struct TransactionConfig<'a> {
     pub sender: String,
@@ -115,6 +118,13 @@ impl Transaction {
             timestamp,
         )?;
 
+        // --- ΛΣ-ΩMEGA™ REFLEX ---
+        let action_hash = H256::from_slice(Keccak512::digest(&signature_data).as_slice()[..32].as_ref());
+        if !omega::reflect_on_action(action_hash).await {
+            return Err(TransactionError::OmegaRejection);
+        }
+        // --- END REFLEX ---
+
         let signature_obj = LatticeSignature::sign(config.signing_key_bytes, &signature_data)
             .map_err(|_| TransactionError::LatticeSignatureVerification)?;
 
@@ -139,6 +149,44 @@ impl Transaction {
             timestamps_guard
                 .retain(|_, &mut stored_ts| current_time.saturating_sub(stored_ts) < 3600);
         }
+        Ok(tx)
+    }
+
+    pub(crate) fn new_coinbase(
+        receiver: String,
+        reward: u64,
+        signing_key_bytes: &[u8],
+        outputs: Vec<Output>,
+    ) -> Result<Self, TransactionError> {
+        let sender = "0000000000000000000000000000000000000000000000000000000000000000".to_string();
+        let timestamp = Self::get_current_timestamp()?;
+        
+        let signature_data = Self::serialize_for_signing(
+            &sender,
+            &receiver,
+            reward,
+            0, // fee
+            &[], // inputs
+            &outputs,
+            timestamp,
+        )?;
+
+        let signature_obj = LatticeSignature::sign(signing_key_bytes, &signature_data)
+            .map_err(|_| TransactionError::LatticeSignatureVerification)?;
+
+        let mut tx = Self {
+            id: String::new(),
+            sender,
+            receiver,
+            amount: reward,
+            fee: 0,
+            inputs: vec![],
+            outputs,
+            lattice_signature: signature_obj.signature,
+            public_key: signature_obj.public_key,
+            timestamp,
+        };
+        tx.id = tx.compute_hash();
         Ok(tx)
     }
 
@@ -256,15 +304,12 @@ impl Transaction {
         hex::encode(&hasher.finalize()[..32])
     }
 
-    #[instrument]
+    #[instrument(skip(self, dag, utxos))]
     pub async fn verify(
         &self,
-        dag: &Arc<RwLock<HyperDAG>>,
-        utxos: &Arc<RwLock<HashMap<String, UTXO>>>,
+        dag: &HyperDAG,
+        utxos: &HashMap<String, UTXO>,
     ) -> Result<(), TransactionError> {
-        let dag_read_guard = dag.read().await;
-        let utxos_read_guard = utxos.read().await;
-
         let verifier_lattice_sig = LatticeSignature {
             public_key: self.public_key.clone(),
             signature: self.lattice_signature.clone(),
@@ -285,7 +330,7 @@ impl Transaction {
         let mut total_input_value = 0;
         for input_val in &self.inputs {
             let utxo_id = format!("{}_{}", input_val.tx_id, input_val.output_index);
-            let utxo_entry = utxos_read_guard.get(&utxo_id).ok_or_else(|| {
+            let utxo_entry = utxos.get(&utxo_id).ok_or_else(|| {
                 TransactionError::InvalidStructure(format!("UTXO {utxo_id} not found for input"))
             })?;
             if utxo_entry.address != self.sender {
@@ -300,8 +345,7 @@ impl Transaction {
         let calculated_sum_of_outputs = self.outputs.iter().map(|o| o.amount).sum::<u64>();
 
         if self.inputs.is_empty() {
-            // Coinbase transaction
-            let expected_reward = dag_read_guard
+            let expected_reward = dag
                 .emission
                 .calculate_reward(self.timestamp)
                 .map_err(TransactionError::EmissionError)?;
@@ -316,17 +360,16 @@ impl Transaction {
                 ));
             }
         } else {
-            // Regular transaction
-            let dev_fee_on_transfer_amount = (self.amount as f64 * DEV_FEE_RATE).round() as u64;
-            if dev_fee_on_transfer_amount > 0
+            let dev_fee_on_transfer = (self.amount as f64 * DEV_FEE_RATE).round() as u64;
+            if dev_fee_on_transfer > 0
                 && !self
                     .outputs
                     .iter()
-                    .any(|o| o.address == DEV_ADDRESS && o.amount == dev_fee_on_transfer_amount)
+                    .any(|o| o.address == DEV_ADDRESS && o.amount == dev_fee_on_transfer)
             {
                 return Err(TransactionError::MissingDevFee);
             }
-            if total_input_value < calculated_sum_of_outputs + self.fee {
+            if total_input_value < self.amount + self.fee + dev_fee_on_transfer {
                 return Err(TransactionError::InsufficientFunds);
             }
         }
@@ -521,7 +564,10 @@ mod tests {
         let dag_arc_for_test = Arc::new(RwLock::new(dag_instance_for_test));
         let utxos_arc_for_test = Arc::new(RwLock::new(initial_utxos_map));
 
-        tx.verify(&dag_arc_for_test, &utxos_arc_for_test)
+        // Correctly lock the Arcs before passing them to verify
+        let dag_read_guard = dag_arc_for_test.read().await;
+        let utxos_read_guard = utxos_arc_for_test.read().await;
+        tx.verify(&dag_read_guard, &utxos_read_guard)
             .await
             .map_err(|e| format!("TX verification error: {e:?}"))?;
 

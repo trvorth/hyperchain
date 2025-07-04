@@ -1,0 +1,17 @@
+[package]
+name = "getrandom"
+version = "0.2.16"
+edition = "2018"
+
+[lib]
+path = "lib.rs"
+
+[features]
+default = []
+std = []
+js = ["wasm-bindgen", "js-sys", "web-sys"]
+
+[dependencies]
+wasm-bindgen = { version = "0.2", optional = true }
+js-sys = { version = "0.3", optional = true }
+web-sys = { version = "0.3", features = ["Crypto", "Window"], optional = true }
