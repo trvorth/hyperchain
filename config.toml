@@ -4,9 +4,7 @@ api_address = "127.0.0.1:8080"
 network_id = "hyperdag-mainnet"
 peers = []
 genesis_validator = "2119707c4caf16139cfb5c09c4dcc9bf9cfe6808b571c108d739f49cc14793b9"
-# FIX: Increased time to find a block
 target_block_time = 30000
-# FIX: Lowered difficulty to make mining possible
 difficulty = 10
 max_amount = 10000000000
 use_gpu = false
