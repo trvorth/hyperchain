@@ -80,7 +80,6 @@ pub mod identity {
     }
 }
 
-
 // --- Sub-module: simulation ---
 pub mod simulation {
     use super::identity::DigitalIdentity;
@@ -116,7 +115,6 @@ pub mod simulation {
     }
 }
 
-
 // --- Helper function for TIA/RDS ---
 fn count_leading_zeros(hash: &H256) -> u32 {
     let mut count = 0;
@@ -131,7 +129,6 @@ fn count_leading_zeros(hash: &H256) -> u32 {
     count
 }
 
-
 // --- Main Logic for the omega module ---
 static SYSTEM_IDENTITY: Lazy<Mutex<DigitalIdentity>> =
     Lazy::new(|| Mutex::new(DigitalIdentity::new()));
@@ -140,18 +137,14 @@ pub async fn reflect_on_action(action_hash: H256) -> bool {
     let mut identity = SYSTEM_IDENTITY.lock().await;
 
     if is_action_dangerous_in_mirror_space(&action_hash, &identity) {
-        warn!(
-            "ΛΣ-ΩMEGA [RDS]: Action {action_hash:?} rejected. Unstable in mirror dimension."
-        );
+        warn!("ΛΣ-ΩMEGA [RDS]: Action {action_hash:?} rejected. Unstable in mirror dimension.");
         identity.threat_level = ThreatLevel::Elevated;
         return false;
     }
 
     let anti_entropy_wave = xor_entropy(&identity.id, &action_hash);
     if is_wave_collapsing_logic(&anti_entropy_wave) {
-        warn!(
-            "ΛΣ-ΩMEGA [ZAEH]: Action {action_hash:?} rejected. Collapsed by anti-entropy wave."
-        );
+        warn!("ΛΣ-ΩMEGA [ZAEH]: Action {action_hash:?} rejected. Collapsed by anti-entropy wave.");
         identity.threat_level = ThreatLevel::Guarded;
         return false;
     }

@@ -3,7 +3,7 @@ use hyperchain::{
     config::{Config, ConfigError},
     node::{Node, NodeError},
     wallet::{Wallet, WalletError},
-    x_phyrus, 
+    x_phyrus,
 };
 use secrecy::SecretString;
 use std::env;
@@ -78,7 +78,9 @@ enum WalletCommands {
 async fn main() -> Result<(), CliError> {
     dotenvy::dotenv().ok();
     let subscriber = FmtSubscriber::builder()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
         .finish();
     tracing::subscriber::set_global_default(subscriber)
         .expect("Failed to set up logging subscriber.");
@@ -107,10 +109,7 @@ async fn handle_wallet_command(command: WalletCommands) -> Result<(), CliError> 
             task::spawn_blocking(move || new_wallet.save_to_file(&output_clone, &password))
                 .await??;
 
-            info!(
-                "Wallet saved successfully to '{}'.",
-                output.display()
-            );
+            info!("Wallet saved successfully to '{}'.", output.display());
         }
     }
     Ok(())

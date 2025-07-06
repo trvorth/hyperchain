@@ -131,14 +131,16 @@ impl Node {
                 })
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                info!("P2P identity key file not found at {p2p_identity_path}, generating a new one.");
+                info!(
+                    "P2P identity key file not found at {p2p_identity_path}, generating a new one."
+                );
                 if let Some(p) = Path::new(p2p_identity_path).parent() {
                     fs::create_dir_all(p).await?;
                 }
                 let new_key = identity::Keypair::generate_ed25519();
-                let new_key_bytes = new_key
-                    .to_protobuf_encoding()
-                    .map_err(|e| NodeError::P2PIdentity(format!("Failed to encode P2P key: {e:?}")))?;
+                let new_key_bytes = new_key.to_protobuf_encoding().map_err(|e| {
+                    NodeError::P2PIdentity(format!("Failed to encode P2P key: {e:?}"))
+                })?;
                 fs::write(p2p_identity_path, new_key_bytes).await?;
                 info!("New P2P identity key saved to {p2p_identity_path}");
                 Ok(new_key)
@@ -318,28 +320,44 @@ impl Node {
             async move {
                 loop {
                     debug!("MINING_LOOP_START: Preparing to mine a new block.");
-                    
+
                     mempool_clone_miner.write().await.prune_expired().await;
                     debug!("MINING_LOOP_STEP_1: Mempool pruned.");
 
                     let (tips, transactions, signing_key_bytes) = {
                         let dag_read = dag_clone_miner.read().await;
                         let tips = dag_read.get_tips(mining_chain_id).await.unwrap_or_default();
-                        
+
                         let mempool_read = mempool_clone_miner.read().await;
                         let utxos_read = utxos_clone_miner.read().await;
-                        let transactions = mempool_read.select_transactions(&dag_read, &utxos_read, crate::hyperdag::MAX_TRANSACTIONS_PER_BLOCK).await;
-                        
+                        let transactions = mempool_read
+                            .select_transactions(
+                                &dag_read,
+                                &utxos_read,
+                                crate::hyperdag::MAX_TRANSACTIONS_PER_BLOCK,
+                            )
+                            .await;
+
                         let signing_key = wallet_clone_miner.get_signing_key()?;
                         (tips, transactions, signing_key.to_bytes())
                     };
-                    debug!("MINING_LOOP_STEP_2: Data for mining gathered ({} tips, {} txs).", tips.len(), transactions.len());
+                    debug!(
+                        "MINING_LOOP_STEP_2: Data for mining gathered ({} tips, {} txs).",
+                        tips.len(),
+                        transactions.len()
+                    );
 
                     let mining_result = {
                         let miner_instance = miner_clone.clone();
                         tokio::task::spawn_blocking(move || {
-                            miner_instance.mine(mining_chain_id, tips, transactions, &signing_key_bytes)
-                        }).await?
+                            miner_instance.mine(
+                                mining_chain_id,
+                                tips,
+                                transactions,
+                                &signing_key_bytes,
+                            )
+                        })
+                        .await?
                     };
 
                     debug!("MINING_LOOP_STEP_3: Mining attempt finished.");
@@ -347,28 +365,37 @@ impl Node {
                     match mining_result {
                         Ok(Some(block)) => {
                             info!("{block}");
-                            
+
                             let mut proposals_guard = proposals_clone_miner.write().await;
-                            if proposals_guard.len() >= MAX_PROPOSALS && !proposals_guard.is_empty() {
+                            if proposals_guard.len() >= MAX_PROPOSALS && !proposals_guard.is_empty()
+                            {
                                 proposals_guard.remove(0);
                             }
                             proposals_guard.push(block.clone());
 
                             if peers_present {
-                                if let Err(e_send) = mining_tx_channel.try_send(P2PCommand::BroadcastBlock(block)) {
+                                if let Err(e_send) =
+                                    mining_tx_channel.try_send(P2PCommand::BroadcastBlock(block))
+                                {
                                     debug!("Failed to send mined block to P2P channel (channel may be full): {e_send}");
                                 }
                             } else {
                                 let mut dag_write_guard = dag_clone_miner.write().await;
-                                if let Err(e) = dag_write_guard.add_block(block, &utxos_clone_miner).await {
-                                    warn!("Failed to add self-mined block in single-node mode: {e}");
+                                if let Err(e) =
+                                    dag_write_guard.add_block(block, &utxos_clone_miner).await
+                                {
+                                    warn!(
+                                        "Failed to add self-mined block in single-node mode: {e}"
+                                    );
                                 }
                             }
                         }
-                        Ok(None) => info!("Mining attempt concluded without finding a block. Retrying..."),
+                        Ok(None) => {
+                            info!("Mining attempt concluded without finding a block. Retrying...")
+                        }
                         Err(e) => error!("An error occurred during mining: {e:?}"),
                     }
-                    
+
                     time::sleep(Duration::from_millis(500)).await;
                 }
             }
