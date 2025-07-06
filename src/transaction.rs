@@ -119,7 +119,8 @@ impl Transaction {
         )?;
 
         // --- ΛΣ-ΩMEGA™ REFLEX ---
-        let action_hash = H256::from_slice(Keccak512::digest(&signature_data).as_slice()[..32].as_ref());
+        let action_hash =
+            H256::from_slice(Keccak512::digest(&signature_data).as_slice()[..32].as_ref());
         if !omega::reflect_on_action(action_hash).await {
             return Err(TransactionError::OmegaRejection);
         }
@@ -160,12 +161,12 @@ impl Transaction {
     ) -> Result<Self, TransactionError> {
         let sender = "0000000000000000000000000000000000000000000000000000000000000000".to_string();
         let timestamp = Self::get_current_timestamp()?;
-        
+
         let signature_data = Self::serialize_for_signing(
             &sender,
             &receiver,
             reward,
-            0, // fee
+            0,   // fee
             &[], // inputs
             &outputs,
             timestamp,

@@ -112,9 +112,10 @@ pub struct LatticeSignature {
 impl LatticeSignature {
     #[instrument]
     pub fn sign(signing_key_bytes: &[u8], message: &[u8]) -> Result<Self, HyperDAGError> {
-        let signing_key = SigningKey::from_bytes(signing_key_bytes.try_into().map_err(|_| {
-            HyperDAGError::InvalidBlock("Invalid signing key length".to_string())
-        })?);
+        let signing_key =
+            SigningKey::from_bytes(signing_key_bytes.try_into().map_err(|_| {
+                HyperDAGError::InvalidBlock("Invalid signing key length".to_string())
+            })?);
         let public_key = signing_key.verifying_key();
         let signature = signing_key.sign(message);
         Ok(Self {
@@ -256,23 +257,38 @@ impl fmt::Display for HyperBlock {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let border = "═".repeat(90);
         writeln!(f, "╔{border}╗")?;
-        writeln!(f, "║ ⛓️  New HyperBlock Mined on Chain #{} ⛓️", self.chain_id)?;
+        writeln!(
+            f,
+            "║ ⛓️  New HyperBlock Mined on Chain #{} ⛓️",
+            self.chain_id
+        )?;
         writeln!(f, "╟{border}╢")?;
         writeln!(f, "║ 🆔 Block ID:      {}", self.id)?;
         writeln!(f, "║ 📅 Timestamp:     {}", self.timestamp)?;
-        writeln!(f, "║ 🔗 Parents:        {}", if self.parents.is_empty() { "(Genesis Block)".to_string() } else { self.parents.join(", ") })?;
+        writeln!(
+            f,
+            "║ 🔗 Parents:        {}",
+            if self.parents.is_empty() {
+                "(Genesis Block)".to_string()
+            } else {
+                self.parents.join(", ")
+            }
+        )?;
         writeln!(f, "║ 🧾 Transactions:   {}", self.transactions.len())?;
         writeln!(f, "║ 🌳 Merkle Root:    {}", self.merkle_root)?;
         writeln!(f, "╟─ Mining Details ─{}╢", "─".repeat(70))?;
         writeln!(f, "║ ⛏️  Miner:           {}", self.miner)?;
         writeln!(f, "║ ✨ Nonce:          {}", self.nonce)?;
         writeln!(f, "║ 💪 Effort:         {} hashes", self.effort)?;
-        writeln!(f, "║ 💰 Block Reward:    {} $HCN (from emission schedule)", self.reward)?;
+        writeln!(
+            f,
+            "║ 💰 Block Reward:    {} $HCN (from emission schedule)",
+            self.reward
+        )?;
         writeln!(f, "╚{border}╝")?;
         Ok(())
     }
 }
-
 
 impl HyperBlock {
     #[instrument]
@@ -288,7 +304,7 @@ impl HyperBlock {
         let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
         let nonce = 0;
         let merkle_root = Self::compute_merkle_root(&transactions)?;
-        
+
         let signing_data = SigningData {
             parents: &parents,
             transactions: &transactions,
@@ -300,17 +316,18 @@ impl HyperBlock {
             chain_id,
             merkle_root: &merkle_root,
         };
-        
+
         let pre_signature_data_for_id = Self::serialize_for_signing(&signing_data)?;
         let id = hex::encode(Keccak256::digest(&pre_signature_data_for_id));
-        
-        let lattice_signature = LatticeSignature::sign(signing_key_material, &pre_signature_data_for_id)?;
-        
+
+        let lattice_signature =
+            LatticeSignature::sign(signing_key_material, &pre_signature_data_for_id)?;
+
         let homomorphic_encrypted_data = transactions
             .iter()
             .map(|tx| HomomorphicEncrypted::new(tx.amount, &lattice_signature.public_key))
             .collect();
-        
+
         Ok(Self {
             chain_id,
             id,
@@ -392,7 +409,6 @@ impl HyperBlock {
     }
 }
 
-
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct GovernanceProposal {
     pub proposal_id: String,
@@ -444,9 +460,7 @@ impl HyperDAG {
         let mut blocks_map = HashMap::new();
         let mut tips_map = HashMap::new();
         let mut validators_map = HashMap::new();
-        let genesis_timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)?
-            .as_secs();
+        let genesis_timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
 
         for chain_id_val in 0..num_chains {
             let mut genesis_block = HyperBlock::new(
@@ -551,32 +565,38 @@ impl HyperDAG {
         let mut utxos_write_guard = utxos_arc.write().await;
         for tx_val in &block.transactions {
             for input_val in &tx_val.inputs {
-                utxos_write_guard.remove(&format!("{}_{}", input_val.tx_id, input_val.output_index));
+                utxos_write_guard
+                    .remove(&format!("{}_{}", input_val.tx_id, input_val.output_index));
             }
             for (index, output_val) in tx_val.outputs.iter().enumerate() {
                 let utxo_id = format!("{}_{}", tx_val.id, index);
-                utxos_write_guard.insert(utxo_id.clone(), UTXO {
-                    address: output_val.address.clone(),
-                    amount: output_val.amount,
-                    tx_id: tx_val.id.clone(),
-                    output_index: index as u32,
-                    explorer_link: format!("https://hyperblockexplorer.org/utxo/{utxo_id}"),
-                });
+                utxos_write_guard.insert(
+                    utxo_id.clone(),
+                    UTXO {
+                        address: output_val.address.clone(),
+                        amount: output_val.amount,
+                        tx_id: tx_val.id.clone(),
+                        output_index: index as u32,
+                        explorer_link: format!("https://hyperblockexplorer.org/utxo/{utxo_id}"),
+                    },
+                );
             }
         }
         drop(utxos_write_guard);
 
         let block_for_db = block.clone();
         self.blocks.write().await.insert(block_id_val, block);
-        
+
         let db_clone = self.db.clone();
         let id_bytes = block_for_db.id.as_bytes().to_vec();
         let block_bytes = serde_json::to_vec(&block_for_db)?;
         task::spawn_blocking(move || db_clone.put(id_bytes, block_bytes))
             .await? // Propagates JoinError
             .map_err(|e| HyperDAGError::DatabaseError(e.to_string()))?; // Maps and propagates RocksDBError
-        
-        self.emission.update_supply(reward_val).map_err(HyperDAGError::EmissionError)?;
+
+        self.emission
+            .update_supply(reward_val)
+            .map_err(HyperDAGError::EmissionError)?;
 
         self.finalize_blocks().await?;
         self.dynamic_sharding().await?;
@@ -586,7 +606,8 @@ impl HyperDAG {
             self.blocks.clone(),
             self.difficulty_history.clone(),
             self.target_block_time,
-        ).await?;
+        )
+        .await?;
 
         BLOCKS_PROCESSED.inc();
         TRANSACTIONS_PROCESSED.inc_by(block_for_db.transactions.len() as u64);
@@ -617,9 +638,7 @@ impl HyperDAG {
         &self,
         params: CrossChainSwapParams,
     ) -> Result<String, HyperDAGError> {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)?
-            .as_secs();
+        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
         let swap_id = hex::encode(Keccak256::digest(
             format!(
                 "swap_{}_{}_{}_{}",
@@ -693,9 +712,7 @@ impl HyperDAG {
         utxos_arc: &Arc<RwLock<HashMap<String, UTXO>>>,
         chain_id_val: u32,
     ) -> Result<HyperBlock, HyperDAGError> {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)?
-            .as_secs();
+        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
         {
             let mut timestamps_guard = self.block_creation_timestamps.write().await;
             let recent_blocks = timestamps_guard
@@ -858,9 +875,7 @@ impl HyperDAG {
         if !block.lattice_signature.verify(&signature_data) {
             return Err(HyperDAGError::LatticeSignatureVerification);
         }
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)?
-            .as_secs();
+        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
         if block.timestamp > now + TEMPORAL_CONSENSUS_WINDOW
             || block.timestamp < now.saturating_sub(TEMPORAL_CONSENSUS_WINDOW)
         {
@@ -1004,52 +1019,76 @@ impl HyperDAG {
         let (sorted_timestamps, now) = {
             let blocks_guard = blocks_lock.read().await;
             let current_time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-            let timestamps: Vec<u64> = blocks_guard.values()
+            let timestamps: Vec<u64> = blocks_guard
+                .values()
                 .filter(|b| current_time.saturating_sub(b.timestamp) < 21600)
                 .map(|b| b.timestamp)
                 .collect();
             (timestamps, current_time)
         }; // Read lock on `blocks` is released here.
 
-        if sorted_timestamps.len() < 10 { return Ok(()); }
-        
+        if sorted_timestamps.len() < 10 {
+            return Ok(());
+        }
+
         let mut sorted_timestamps = sorted_timestamps;
         sorted_timestamps.sort_unstable();
 
-        let time_span = sorted_timestamps.last().unwrap_or(&now).saturating_sub(*sorted_timestamps.first().unwrap_or(&now));
+        let time_span = sorted_timestamps
+            .last()
+            .unwrap_or(&now)
+            .saturating_sub(*sorted_timestamps.first().unwrap_or(&now));
         let block_count_in_span = sorted_timestamps.len() as u64;
 
-        let actual_time_per_block = if block_count_in_span > 1 { time_span / (block_count_in_span - 1) } else { target_block_time };
+        let actual_time_per_block = if block_count_in_span > 1 {
+            time_span / (block_count_in_span - 1)
+        } else {
+            target_block_time
+        };
 
-        if actual_time_per_block == 0 { return Ok(()); }
+        if actual_time_per_block == 0 {
+            return Ok(());
+        }
 
         let adjustment_factor = target_block_time as f64 / actual_time_per_block as f64;
-        
+
         // --- WRITE PHASE 1: Update History ---
         let predictive_factor = {
             let mut history_guard = history_lock.write().await;
             history_guard.push((now, actual_time_per_block));
-            if history_guard.len() > 100 { history_guard.remove(0); }
+            if history_guard.len() > 100 {
+                history_guard.remove(0);
+            }
             if !history_guard.is_empty() {
-                let avg_hist_time: u64 = history_guard.iter().map(|&(_, t)| t).sum::<u64>() / (history_guard.len() as u64).max(1);
-                if avg_hist_time == 0 { 1.0 } else { target_block_time as f64 / avg_hist_time as f64 }
-            } else { 1.0 }
+                let avg_hist_time: u64 = history_guard.iter().map(|&(_, t)| t).sum::<u64>()
+                    / (history_guard.len() as u64).max(1);
+                if avg_hist_time == 0 {
+                    1.0
+                } else {
+                    target_block_time as f64 / avg_hist_time as f64
+                }
+            } else {
+                1.0
+            }
         };
 
         // --- WRITE PHASE 2: Update Difficulty ---
         let mut difficulty_guard = difficulty_lock.write().await;
-        let new_difficulty_f64 = *difficulty_guard as f64 * adjustment_factor.clamp(0.5, 2.0) * predictive_factor.clamp(0.8, 1.2);
+        let new_difficulty_f64 = *difficulty_guard as f64
+            * adjustment_factor.clamp(0.5, 2.0)
+            * predictive_factor.clamp(0.8, 1.2);
         *difficulty_guard = new_difficulty_f64.max(1.0) as u64;
-        
-        info!("Adjusted difficulty to {}. Actual time/block: {}, Target: {}", *difficulty_guard, actual_time_per_block, target_block_time);
+
+        info!(
+            "Adjusted difficulty to {}. Actual time/block: {}, Target: {}",
+            *difficulty_guard, actual_time_per_block, target_block_time
+        );
         Ok(())
     }
     #[instrument]
     pub async fn finalize_blocks(&self) -> Result<(), HyperDAGError> {
         let blocks_guard = self.blocks.read().await;
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)?
-            .as_secs();
+        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
         let mut finalized_guard = self.finalized_blocks.write().await;
         let tips_guard = self.tips.read().await;
         let num_chains_val = *self.num_chains.read().await;

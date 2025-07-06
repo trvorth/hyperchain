@@ -104,20 +104,30 @@ async fn generate_wallet(output: PathBuf) -> Result<()> {
 }
 
 async fn show_address(wallet_path: PathBuf) -> Result<()> {
-    println!("Enter password to display address for '{}':", wallet_path.display());
+    println!(
+        "Enter password to display address for '{}':",
+        wallet_path.display()
+    );
     let password = prompt_for_password(false)?;
-    let wallet = Wallet::from_file(&wallet_path, &password)
-        .context(format!("Failed to load wallet from '{}'", wallet_path.display()))?;
+    let wallet = Wallet::from_file(&wallet_path, &password).context(format!(
+        "Failed to load wallet from '{}'",
+        wallet_path.display()
+    ))?;
 
     println!("Wallet Address: {}", wallet.address());
     Ok(())
 }
 
 async fn get_balance(node_url: &str, wallet_path: PathBuf) -> Result<()> {
-    println!("Enter password to check balance for '{}':", wallet_path.display());
+    println!(
+        "Enter password to check balance for '{}':",
+        wallet_path.display()
+    );
     let password = prompt_for_password(false)?;
-    let wallet = Wallet::from_file(&wallet_path, &password)
-        .context(format!("Failed to load wallet from '{}'", wallet_path.display()))?;
+    let wallet = Wallet::from_file(&wallet_path, &password).context(format!(
+        "Failed to load wallet from '{}'",
+        wallet_path.display()
+    ))?;
     let address = wallet.address();
 
     let client = Client::new();
@@ -126,13 +136,23 @@ async fn get_balance(node_url: &str, wallet_path: PathBuf) -> Result<()> {
     println!("Querying balance for address: {address}");
     println!("From node: {node_url}");
 
-    let res = client.get(&url).send().await.context(format!("Failed to connect to node at {url}"))?;
+    let res = client
+        .get(&url)
+        .send()
+        .await
+        .context(format!("Failed to connect to node at {url}"))?;
 
     if res.status().is_success() {
-        let balance: u64 = res.json().await.context("Failed to parse balance from response")?;
+        let balance: u64 = res
+            .json()
+            .await
+            .context("Failed to parse balance from response")?;
         println!("\nBalance: {balance}");
     } else {
-        let error_text = res.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+        let error_text = res
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unknown error".to_string());
         return Err(anyhow!("Node returned an error: {}", error_text));
     }
 
@@ -148,22 +168,32 @@ async fn send_transaction(
 ) -> Result<()> {
     println!("Preparing to send {amount} to address {to}");
     let password = prompt_for_password(false)?;
-    let wallet = Wallet::from_file(&wallet_path, &password)
-        .context(format!("Failed to load wallet from '{}'", wallet_path.display()))?;
-    
+    let wallet = Wallet::from_file(&wallet_path, &password).context(format!(
+        "Failed to load wallet from '{}'",
+        wallet_path.display()
+    ))?;
+
     let sender_address = wallet.address();
     let client = Client::new();
 
     // 1. Fetch UTXOs for the sender's address
     let utxo_url = format!("{node_url}/utxos/{sender_address}");
     println!("Fetching available funds (UTXOs) from {node_url}...");
-    
-    let res = client.get(&utxo_url).send().await.context("Failed to fetch UTXOs")?;
+
+    let res = client
+        .get(&utxo_url)
+        .send()
+        .await
+        .context("Failed to fetch UTXOs")?;
     if !res.status().is_success() {
-        return Err(anyhow!("Node failed to provide UTXOs: {}", res.text().await?));
+        return Err(anyhow!(
+            "Node failed to provide UTXOs: {}",
+            res.text().await?
+        ));
     }
-    let available_utxos: HashMap<String, UTXO> = res.json().await.context("Failed to parse UTXOs")?;
-    
+    let available_utxos: HashMap<String, UTXO> =
+        res.json().await.context("Failed to parse UTXOs")?;
+
     if available_utxos.is_empty() {
         return Err(anyhow!("No funds available for address {}", sender_address));
     }
@@ -201,14 +231,20 @@ async fn send_transaction(
     let mut outputs = vec![Output {
         address: to.clone(),
         amount,
-        homomorphic_encrypted: hyperchain::hyperdag::HomomorphicEncrypted::new(amount, he_pub_key_material),
+        homomorphic_encrypted: hyperchain::hyperdag::HomomorphicEncrypted::new(
+            amount,
+            he_pub_key_material,
+        ),
     }];
 
     if dev_fee > 0 {
         outputs.push(Output {
             address: DEV_ADDRESS.to_string(),
             amount: dev_fee,
-            homomorphic_encrypted: hyperchain::hyperdag::HomomorphicEncrypted::new(dev_fee, he_pub_key_material),
+            homomorphic_encrypted: hyperchain::hyperdag::HomomorphicEncrypted::new(
+                dev_fee,
+                he_pub_key_material,
+            ),
         });
     }
 
@@ -217,7 +253,10 @@ async fn send_transaction(
         outputs.push(Output {
             address: sender_address.clone(),
             amount: change,
-            homomorphic_encrypted: hyperchain::hyperdag::HomomorphicEncrypted::new(change, he_pub_key_material),
+            homomorphic_encrypted: hyperchain::hyperdag::HomomorphicEncrypted::new(
+                change,
+                he_pub_key_material,
+            ),
         });
     }
 
@@ -234,21 +273,34 @@ async fn send_transaction(
         tx_timestamps: Arc::new(RwLock::new(HashMap::new())), // For standalone creation
     };
 
-    let tx = Transaction::new(tx_config).await.context("Failed to create transaction")?;
+    let tx = Transaction::new(tx_config)
+        .await
+        .context("Failed to create transaction")?;
     println!("Transaction created with ID: {}", tx.id);
 
     // 5. Submit the transaction to the node
     let tx_url = format!("{node_url}/transaction");
     println!("Submitting transaction to {tx_url}...");
 
-    let res = client.post(&tx_url).json(&tx).send().await.context("Failed to send transaction")?;
+    let res = client
+        .post(&tx_url)
+        .json(&tx)
+        .send()
+        .await
+        .context("Failed to send transaction")?;
 
     if res.status().is_success() {
-        let tx_id_response: String = res.json().await.context("Failed to parse transaction ID from response")?;
+        let tx_id_response: String = res
+            .json()
+            .await
+            .context("Failed to parse transaction ID from response")?;
         println!("\nTransaction submitted successfully!");
         println!("Transaction ID: {tx_id_response}");
     } else {
-        let error_text = res.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+        let error_text = res
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unknown error".to_string());
         return Err(anyhow!("Node rejected transaction: {}", error_text));
     }
 
@@ -267,7 +319,9 @@ fn prompt_for_password(confirm: bool) -> Result<SecretString, WalletError> {
         io::stdout().flush()?;
         let confirmation = rpassword::read_password().map_err(WalletError::Io)?;
         if password != confirmation {
-            return Err(WalletError::Passphrase("Passwords do not match.".to_string()));
+            return Err(WalletError::Passphrase(
+                "Passwords do not match.".to_string(),
+            ));
         }
     }
     Ok(SecretString::new(password))
