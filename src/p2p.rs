@@ -1,9 +1,9 @@
 // p2p.rs
 
-use crate::hyperdag::{HyperBlock, HyperDAG, LatticeSignature};
+use crate::hyperdag::{HyperBlock, HyperDAG, LatticeSignature, UTXO};
 use crate::mempool::Mempool;
 use crate::node::PeerCache;
-use crate::transaction::{Transaction, UTXO};
+use crate::transaction::Transaction;
 use futures::stream::StreamExt;
 use governor::{clock::DefaultClock, state::keyed::DashMapStateStore, Quota, RateLimiter};
 use hmac::{Hmac, Mac};

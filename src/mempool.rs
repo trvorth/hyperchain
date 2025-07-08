@@ -1,5 +1,5 @@
-use crate::hyperdag::HyperDAG;
-use crate::transaction::{Transaction, TransactionError, UTXO};
+use crate::hyperdag::{HyperDAG, UTXO};
+use crate::transaction::{Transaction, TransactionError};
 use log::{info, warn};
 use prometheus::{register_gauge, register_int_counter, Gauge, IntCounter};
 use std::collections::HashMap;

@@ -1,10 +1,11 @@
 use crate::config::{Config, ConfigError};
-use crate::hyperdag::{HyperBlock, HyperDAG};
+use crate::hyperdag::{HyperBlock, HyperDAG, UTXO};
 use crate::mempool::Mempool;
 use crate::miner::{Miner, MinerConfig, MiningError};
 use crate::omega::reflect_on_action;
 use crate::p2p::{P2PCommand, P2PConfig, P2PError, P2PServer};
-use crate::transaction::{Transaction, UTXO};
+use crate::saga::PalletSaga;
+use crate::transaction::Transaction;
 use crate::wallet::Wallet;
 use anyhow;
 use axum::{
@@ -108,6 +109,7 @@ pub struct Node {
     pub proposals: Arc<RwLock<Vec<HyperBlock>>>,
     mining_chain_id: u32,
     peer_cache_path: String,
+    pub saga_pallet: Arc<PalletSaga>,
 }
 
 type DirectApiRateLimiter = RateLimiter<NotKeyed, InMemoryState, QuantaClock>;
@@ -221,6 +223,8 @@ impl Node {
         let miner_instance = Miner::new(miner_config)?;
         let miner = Arc::new(miner_instance);
 
+        let saga_pallet = Arc::new(PalletSaga::new());
+
         Ok(Self {
             _config_path: config_path,
             config: config.clone(),
@@ -233,6 +237,7 @@ impl Node {
             proposals,
             mining_chain_id: config.mining_chain_id,
             peer_cache_path,
+            saga_pallet,
         })
     }
 
@@ -322,6 +327,8 @@ impl Node {
             let proposals_clone_miner = self.proposals.clone();
             let wallet_clone_miner = self.wallet.clone();
             let mining_chain_id = self.mining_chain_id;
+            let saga_pallet_clone = self.saga_pallet.clone(); // Clone SAGA pallet for mining task
+
             async move {
                 loop {
                     debug!("MINING_LOOP_START: Preparing to mine a new block.");
@@ -368,8 +375,36 @@ impl Node {
                     debug!("MINING_LOOP_STEP_3: Mining attempt finished.");
 
                     match mining_result {
-                        Ok(Some(block)) => {
-                            info!("{block}");
+                        Ok(Some(mut block)) => {
+                            // SAGA INTEGRATION: Evaluate and apply dynamic reward
+                            // **FIX**: Pass the Arc directly, not a read guard, to fix the type mismatch error.
+                            if let Err(e) = saga_pallet_clone
+                                .evaluate_block_with_saga(&block, &dag_clone_miner)
+                                .await
+                            {
+                                warn!("SAGA evaluation for block {} failed: {}", block.id, e);
+                            }
+
+                            // Calculate the dynamic reward. This function doesn't need the DAG directly
+                            // as it relies on the now-updated credit scores within SAGA.
+                            match saga_pallet_clone.calculate_dynamic_reward(&block).await {
+                                Ok(dynamic_reward) => {
+                                    info!(
+                                        "SAGA dynamic reward for block {} is {}. Original reward was {}.",
+                                        block.id, dynamic_reward, block.reward
+                                    );
+                                    block.reward = dynamic_reward; // Overwrite reward with SAGA's calculation
+                                }
+                                Err(e) => {
+                                    error!(
+                                        "SAGA failed to calculate dynamic reward for block {}: {}. Using original miner reward.",
+                                        block.id, e
+                                    );
+                                    // If SAGA fails, we simply proceed with the reward already in the block from the miner.
+                                }
+                            }
+
+                            info!("{block}"); // Log the block *after* reward modification
 
                             let mut proposals_guard = proposals_clone_miner.write().await;
                             if proposals_guard.len() >= MAX_PROPOSALS && !proposals_guard.is_empty()
@@ -505,6 +540,8 @@ impl Node {
         Ok(())
     }
 }
+
+// --- The rest of the file (API handlers and tests) is unchanged ---
 
 async fn rate_limit_layer(
     MiddlewareState(limiter): MiddlewareState<Arc<DirectApiRateLimiter>>,

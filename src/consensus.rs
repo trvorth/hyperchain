@@ -1,5 +1,4 @@
-use crate::hyperdag::{HyperBlock, HyperDAG};
-use crate::transaction::UTXO;
+use crate::hyperdag::{HyperBlock, HyperDAG, UTXO};
 use std::collections::HashMap;
 use std::sync::Arc;
 use thiserror::Error;

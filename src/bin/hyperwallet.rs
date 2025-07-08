@@ -1,7 +1,9 @@
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
+// FIX: UTXO is part of the `hyperdag` module, not `transaction`. Import it directly.
 use hyperchain::{
-    transaction::{Input, Output, Transaction, TransactionConfig, UTXO},
+    hyperdag::UTXO,
+    transaction::{Input, Output, Transaction, TransactionConfig},
     wallet::{Wallet, WalletError},
 };
 use reqwest::Client;
@@ -309,14 +311,12 @@ async fn send_transaction(
 
 fn prompt_for_password(confirm: bool) -> Result<SecretString, WalletError> {
     print!("Enter wallet password: ");
-    // FIX: Removed .context() to allow `?` to convert from std::io::Error to WalletError::Io
-    io::stdout().flush()?;
+    io::stdout().flush().map_err(WalletError::Io)?;
     let password = rpassword::read_password().map_err(WalletError::Io)?;
 
     if confirm {
         print!("Confirm wallet password: ");
-        // FIX: Removed .context() to allow `?` to convert from std::io::Error to WalletError::Io
-        io::stdout().flush()?;
+        io::stdout().flush().map_err(WalletError::Io)?;
         let confirmation = rpassword::read_password().map_err(WalletError::Io)?;
         if password != confirmation {
             return Err(WalletError::Passphrase(

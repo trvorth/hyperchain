@@ -8,6 +8,11 @@ license = "MIT"
 repository = "https://github.com/trvorth/hyperchain"
 
 [dependencies]
+# --- SAGA AI & Machine Learning ---
+linfa = { version = "0.7.0", optional = true }
+linfa-trees = { version = "0.7.0", optional = true }
+ndarray = { version = "0.15.6", optional = true }
+
 # Core blockchain and networking
 libp2p = { version = "0.55.0", features = ["full"] }
 futures = "0.3.30"
@@ -115,6 +120,7 @@ criterion = "0.5.1"
 default = []
 gpu = ["ocl"]
 zk = ["bellman", "bls12_381", "ff"]
+ai = ["linfa", "linfa-trees", "ndarray"]
 
 [lib]
 name = "hyperchain"
