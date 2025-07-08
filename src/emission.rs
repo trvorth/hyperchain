@@ -1,3 +1,5 @@
+// src/emission.rs
+
 use log::debug;
 use prometheus::{register_int_counter, IntCounter};
 use serde::{Deserialize, Serialize};
@@ -7,7 +9,7 @@ use tracing::instrument;
 // Made constants public
 pub const INITIAL_REWARD: u64 = 500; // Initial block reward
 pub const TOTAL_SUPPLY: u64 = 10_000_000_000_000_000; // Total supply cap set to 10 Billion
-pub const HALVING_PERIOD: u64 = 7_884_000; // 3 months (~30.42 days/month * 86,400 seconds/day)
+pub const HALVING_PERIOD: u64 = 7_884_000; // 3 months in seconds
 pub const HALVING_FACTOR: f64 = 0.97; // 3% reduction per halving
 pub const SCALE: u64 = 1_000_000; // Fixed-point scale for precision
 
@@ -47,7 +49,7 @@ impl Emission {
         Self {
             initial_reward: initial_reward.max(1),
             total_supply,
-            halving_period: halving_period.max(1), // Ensure halving_period is not zero
+            halving_period: halving_period.max(1),
             halving_factor: halving_factor.clamp(0.0, 1.0),
             genesis_timestamp,
             current_supply: 0,
@@ -75,34 +77,20 @@ impl Emission {
         }
 
         let elapsed_time = timestamp.saturating_sub(self.genesis_timestamp);
-        let elapsed_periods = elapsed_time / self.halving_period; // Already validated halving_period > 0 in new()
+        let elapsed_periods = elapsed_time / self.halving_period;
 
-        let reward_scaled = self
-            .initial_reward
-            .checked_mul(SCALE)
-            .ok_or("Reward scale overflow")?;
-
-        let factor = self.halving_factor.powi(elapsed_periods as i32);
-        // Ensure SCALE is not zero before division, though it's a const.
-        let reward_f64 = (reward_scaled as f64 * factor) / (SCALE as f64).max(1.0);
-
-        if !reward_f64.is_finite() {
-            return Err("Reward calculation resulted in non-finite number".into());
+        let mut reward = self.initial_reward as f64;
+        for _ in 0..elapsed_periods {
+            reward *= self.halving_factor;
         }
 
-        let reward = reward_f64.round() as u64;
-        // num_chains is validated to be at least 1 in new()
-        let per_chain_reward = reward
-            .checked_div(self.num_chains as u64)
-            .unwrap_or(1)
-            .max(1);
+        let reward = reward.round() as u64;
+        let per_chain_reward = reward.checked_div(self.num_chains as u64).unwrap_or(1).max(1);
+
 
         if elapsed_periods > self.last_halving_period {
-            // Check against persisted last_halving_period
             HALVING_EVENTS.inc();
             debug!("Halving event: period {elapsed_periods}, current reward per chain: {per_chain_reward}");
-            // Note: self.last_halving_period should be updated by the caller (e.g., Miner or HyperDAG)
-            // after a block containing this reward is confirmed, or via update_last_halving_period method.
         }
 
         Ok(per_chain_reward)

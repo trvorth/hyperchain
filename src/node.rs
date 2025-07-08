@@ -273,7 +273,12 @@ impl Node {
                         peer_cache_path: peer_cache_path_clone.clone(),
                     };
                     info!("Attempting to initialize P2P server...");
-                    match timeout(Duration::from_secs(15), P2PServer::new(p2p_config)).await {
+                    match timeout(
+                        Duration::from_secs(15),
+                        P2PServer::new(p2p_config, p2p_command_sender_clone.clone()),
+                    )
+                    .await
+                    {
                         Ok(Ok(server)) => {
                             info!("P2P server initialized successfully.");
                             break server;

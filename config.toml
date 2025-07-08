@@ -1,7 +1,7 @@
 p2p_address = "/ip4/0.0.0.0/tcp/8000"
 local_full_p2p_address = "/ip4/0.0.0.0/tcp/8000/p2p/12D3KooWJXhhf8xDm8XH1CSBjLbemw7H384NQZwuexiRvqqFgZhC"
 api_address = "127.0.0.1:8080"
-network_id = "hyperdag-mainnet"
+network_id = "hyperdag-testnet"
 peers = []
 genesis_validator = "2119707c4caf16139cfb5c09c4dcc9bf9cfe6808b571c108d739f49cc14793b9"
 target_block_time = 30000
