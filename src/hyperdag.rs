@@ -515,6 +515,24 @@ impl HyperDAG {
         block: HyperBlock,
         utxos_arc: &Arc<RwLock<HashMap<String, UTXO>>>,
     ) -> Result<bool, HyperDAGError> {
+        if let Some(coinbase_tx) = block.transactions.first() {
+            if coinbase_tx.inputs.is_empty() {
+                let mut utxos_write_guard = utxos_arc.write().await;
+                for (index, output_val) in coinbase_tx.outputs.iter().enumerate() {
+                    let utxo_id = format!("{}_{}", coinbase_tx.id, index);
+                    utxos_write_guard.insert(
+                        utxo_id.clone(),
+                        UTXO {
+                            address: output_val.address.clone(),
+                            amount: output_val.amount,
+                            tx_id: coinbase_tx.id.clone(),
+                            output_index: index as u32,
+                            explorer_link: format!("https://hyperblockexplorer.org/utxo/{utxo_id}"),
+                        },
+                    );
+                }
+            }
+        }
         {
             let blocks_guard = self.blocks.read().await;
             if blocks_guard.contains_key(&block.id) {
@@ -558,12 +576,8 @@ impl HyperDAG {
             }
         }
 
-        let reward_val = block.reward;
-        let block_id_val = block.id.clone();
-        let _chain_id_val = block.chain_id;
-
         let mut utxos_write_guard = utxos_arc.write().await;
-        for tx_val in &block.transactions {
+        for tx_val in block.transactions.iter().skip(1) { // Skip the coinbase tx
             for input_val in &tx_val.inputs {
                 utxos_write_guard
                     .remove(&format!("{}_{}", input_val.tx_id, input_val.output_index));
@@ -585,17 +599,17 @@ impl HyperDAG {
         drop(utxos_write_guard);
 
         let block_for_db = block.clone();
-        self.blocks.write().await.insert(block_id_val, block);
+        self.blocks.write().await.insert(block.id.clone(), block);
 
         let db_clone = self.db.clone();
         let id_bytes = block_for_db.id.as_bytes().to_vec();
         let block_bytes = serde_json::to_vec(&block_for_db)?;
         task::spawn_blocking(move || db_clone.put(id_bytes, block_bytes))
-            .await? // Propagates JoinError
-            .map_err(|e| HyperDAGError::DatabaseError(e.to_string()))?; // Maps and propagates RocksDBError
+            .await? 
+            .map_err(|e| HyperDAGError::DatabaseError(e.to_string()))?; 
 
         self.emission
-            .update_supply(reward_val)
+            .update_supply(block_for_db.reward) 
             .map_err(HyperDAGError::EmissionError)?;
 
         self.finalize_blocks().await?;
@@ -614,8 +628,7 @@ impl HyperDAG {
         Ok(true)
     }
 
-    // All other methods (get_id, get_tips, adjust_difficulty, is_valid_block, etc.) are unchanged.
-    // Omitted for brevity.
+
     #[instrument]
     pub async fn get_id(&self) -> u32 {
         0

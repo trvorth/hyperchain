@@ -1,3 +1,5 @@
+// p2p.rs
+
 use crate::hyperdag::{HyperBlock, HyperDAG, LatticeSignature};
 use crate::mempool::Mempool;
 use crate::node::PeerCache;
@@ -174,6 +176,7 @@ pub enum P2PCommand {
     BroadcastBlock(HyperBlock),
     BroadcastTransaction(Transaction),
     RequestState,
+    BroadcastState(HashMap<String, HyperBlock>, HashMap<String, UTXO>),
 }
 
 type KeyedPeerRateLimiter = RateLimiter<PeerId, DashMapStateStore<PeerId>, DefaultClock>;
@@ -201,6 +204,7 @@ pub struct GossipMessageContext {
     pub mempool: Arc<RwLock<Mempool>>,
     pub utxos: Arc<RwLock<HashMap<String, UTXO>>>,
     pub proposals: Arc<RwLock<Vec<HyperBlock>>>,
+    pub p2p_command_sender: mpsc::Sender<P2PCommand>,
 }
 
 pub struct P2PServer {
@@ -218,11 +222,15 @@ pub struct P2PServer {
     known_peers: Arc<RwLock<HashSet<PeerId>>>,
     initial_peers_config: Vec<String>,
     peer_cache_path: String,
+    p2p_command_sender: mpsc::Sender<P2PCommand>,
 }
 
 impl P2PServer {
-    #[instrument(skip(config))]
-    pub async fn new(config: P2PConfig<'_>) -> Result<Self, P2PError> {
+    #[instrument(skip(config, p2p_command_sender))]
+    pub async fn new(
+        config: P2PConfig<'_>,
+        p2p_command_sender: mpsc::Sender<P2PCommand>,
+    ) -> Result<Self, P2PError> {
         let local_peer_id = PeerId::from(config.local_keypair.public());
         info!("P2PServer using Local P2P Peer ID: {}", local_peer_id);
 
@@ -306,6 +314,7 @@ impl P2PServer {
             known_peers: Arc::new(RwLock::new(HashSet::new())),
             initial_peers_config: config.initial_peers,
             peer_cache_path: config.peer_cache_path,
+            p2p_command_sender,
         })
     }
 
@@ -338,11 +347,10 @@ impl P2PServer {
                 P2PError::GossipsubConfig(format!("Error building Gossipsub config: {e_str}"))
             })?;
 
-        gossipsub::Behaviour::new(MessageAuthenticity::Signed(local_key), gossipsub_config).map_err(
-            |e_str| {
+        gossipsub::Behaviour::new(MessageAuthenticity::Signed(local_key), gossipsub_config)
+            .map_err(|e_str| {
                 P2PError::GossipsubConfig(format!("Error creating Gossipsub behaviour: {e_str}"))
-            },
-        )
+            })
     }
 
     fn subscribe_to_topics(
@@ -369,13 +377,19 @@ impl P2PServer {
         local_peer_id: &PeerId,
     ) -> Result<(), P2PError> {
         if addresses.is_empty() {
-            warn!("No explicit listen addresses provided. Node will attempt to listen on default OS-assigned addresses.");
+            warn!(
+                "No explicit listen addresses provided. Node will attempt to listen on default OS-assigned addresses."
+            );
         }
         for addr_str in addresses {
             let multiaddr: Multiaddr = addr_str.parse()?;
             match swarm.listen_on(multiaddr.clone()) {
-                Ok(_) => info!("P2P Server attempting to listen on configured address: {multiaddr}"),
-                Err(e) => warn!("Failed to listen on {multiaddr}: {e}. OS will assign address or mDNS might still work."),
+                Ok(_) => {
+                    info!("P2P Server attempting to listen on configured address: {multiaddr}")
+                }
+                Err(e) => warn!(
+                    "Failed to listen on {multiaddr}: {e}. OS will assign address or mDNS might still work."
+                ),
             }
         }
         info!("P2P Server initialized with Local Peer ID: {local_peer_id}");
@@ -471,7 +485,9 @@ impl P2PServer {
                     message_id,
                     message,
                 }) => {
-                    debug!("GossipSub: Received message (ID: {message_id}) from peer: {propagation_source}");
+                    debug!(
+                        "GossipSub: Received message (ID: {message_id}) from peer: {propagation_source}"
+                    );
 
                     let context = GossipMessageContext {
                         blacklist: self.blacklist.clone(),
@@ -482,6 +498,7 @@ impl P2PServer {
                         mempool: self.mempool.clone(),
                         utxos: self.utxos.clone(),
                         proposals: self.proposals.clone(),
+                        p2p_command_sender: self.p2p_command_sender.clone(),
                     };
 
                     tokio::spawn(async move {
@@ -572,9 +589,34 @@ impl P2PServer {
     #[instrument(skip(self, command))]
     async fn process_internal_command(&mut self, command: P2PCommand) -> Result<(), P2PError> {
         match command {
-            P2PCommand::BroadcastBlock(block) => self.broadcast_block(block).await,
-            P2PCommand::BroadcastTransaction(tx) => self.broadcast_transaction(tx).await,
-            P2PCommand::RequestState => self.broadcast_state_request_message().await,
+            P2PCommand::BroadcastBlock(block) => {
+                self.broadcast_message(
+                    NetworkMessageData::Block(block.clone()),
+                    0,
+                    &format!("block {}", block.id),
+                )
+                .await
+            }
+            P2PCommand::BroadcastTransaction(tx) => {
+                self.broadcast_message(
+                    NetworkMessageData::Transaction(tx.clone()),
+                    1,
+                    &format!("transaction {}", tx.id),
+                )
+                .await
+            }
+            P2PCommand::RequestState => {
+                self.broadcast_message(NetworkMessageData::StateRequest, 2, "state request")
+                    .await
+            }
+            P2PCommand::BroadcastState(blocks, utxos) => {
+                self.broadcast_message(
+                    NetworkMessageData::State(blocks, utxos),
+                    2,
+                    "state data",
+                )
+                .await
+            }
         }
     }
 
@@ -621,7 +663,9 @@ impl P2PServer {
         let msg_payload: NetworkMessage = match serde_json::from_slice(&message.data) {
             Ok(payload) => payload,
             Err(e) => {
-                warn!("Failed to deserialize message from peer {source} on topic {topic_str}: {e}");
+                warn!(
+                    "Failed to deserialize message from peer {source} on topic {topic_str}: {e}"
+                );
                 return;
             }
         };
@@ -691,11 +735,26 @@ impl P2PServer {
                 .await
             }
             NetworkMessageData::StateRequest => {
-                info!("Received StateRequest from peer {source}. Preparing to send current state.");
+                info!(
+                    "Received StateRequest from peer {source}. Preparing to send current state."
+                );
                 let dag_guard = context.dag.read().await;
+
                 let (blocks, current_utxos) = dag_guard.get_state_snapshot(0).await;
                 drop(dag_guard);
-                warn!("Received StateRequest; static processing cannot send reply with {} blocks and {} UTXOs. This requires an instance method with access to the swarm to send a reply.", blocks.len(), current_utxos.len());
+
+                let blocks_len = blocks.len();
+                let utxos_len = current_utxos.len();
+
+                if let Err(e) = context
+                    .p2p_command_sender
+                    .send(P2PCommand::BroadcastState(blocks, current_utxos))
+                    .await
+                {
+                    error!("Failed to send BroadcastState command: {e}");
+                }
+
+                warn!("Received StateRequest; static processing cannot send reply with {blocks_len} blocks and {utxos_len} UTXOs. This requires an instance method with access to the swarm to send a reply.");
             }
         }
     }
@@ -902,12 +961,14 @@ impl P2PServer {
         Self::dial_initial_peers(&mut self.swarm, &self.initial_peers_config).await;
     }
 
-    async fn broadcast_block(&mut self, block: HyperBlock) -> Result<(), P2PError> {
-        let topic = &self.topics[0];
-        let net_msg = NetworkMessage::new(
-            NetworkMessageData::Block(block.clone()),
-            &self.node_lattice_signing_key_bytes,
-        )?;
+    async fn broadcast_message(
+        &mut self,
+        data: NetworkMessageData,
+        topic_index: usize,
+        log_info: &str,
+    ) -> Result<(), P2PError> {
+        let topic = &self.topics[topic_index];
+        let net_msg = NetworkMessage::new(data, &self.node_lattice_signing_key_bytes)?;
         let msg_bytes = serde_json::to_vec(&net_msg)?;
 
         self.swarm
@@ -916,80 +977,7 @@ impl P2PServer {
             .publish(topic.clone(), msg_bytes)
             .map(|msg_id| {
                 MESSAGES_SENT.inc();
-                info!("Broadcasted block: {}, Message ID: {}", block.id, msg_id);
-            })
-            .map_err(P2PError::Broadcast)
-    }
-
-    async fn broadcast_transaction(&mut self, tx: Transaction) -> Result<(), P2PError> {
-        let topic = &self.topics[1];
-        let net_msg = NetworkMessage::new(
-            NetworkMessageData::Transaction(tx.clone()),
-            &self.node_lattice_signing_key_bytes,
-        )?;
-        let msg_bytes = serde_json::to_vec(&net_msg)?;
-
-        self.swarm
-            .behaviour_mut()
-            .gossipsub
-            .publish(topic.clone(), msg_bytes)
-            .map(|msg_id| {
-                MESSAGES_SENT.inc();
-                info!("Broadcasted transaction: {}, Message ID: {}", tx.id, msg_id);
-            })
-            .map_err(P2PError::Broadcast)
-    }
-
-    async fn broadcast_state_request_message(&mut self) -> Result<(), P2PError> {
-        let topic = &self.topics[2];
-        let net_msg = NetworkMessage::new(
-            NetworkMessageData::StateRequest,
-            &self.node_lattice_signing_key_bytes,
-        )?;
-        let msg_bytes = serde_json::to_vec(&net_msg)?;
-
-        self.swarm
-            .behaviour_mut()
-            .gossipsub
-            .publish(topic.clone(), msg_bytes)
-            .map(|msg_id| {
-                MESSAGES_SENT.inc();
-                info!("Broadcasted StateRequest message, Message ID: {msg_id}");
-            })
-            .map_err(P2PError::Broadcast)
-    }
-
-    #[allow(dead_code)]
-    async fn broadcast_own_state_data(&mut self) -> Result<(), P2PError> {
-        let topic = &self.topics[2];
-        let (blocks, utxos_map) = {
-            let dag_guard = self.dag.read().await;
-            dag_guard.get_state_snapshot(0).await
-        };
-
-        info!(
-            "Broadcasting own state data: {} blocks, {} UTXOs",
-            blocks.len(),
-            utxos_map.len()
-        );
-
-        let net_msg = NetworkMessage::new(
-            NetworkMessageData::State(blocks, utxos_map),
-            &self.node_lattice_signing_key_bytes,
-        )?;
-        let msg_bytes = serde_json::to_vec(&net_msg)?;
-
-        self.swarm
-            .behaviour_mut()
-            .gossipsub
-            .publish(topic.clone(), msg_bytes.clone())
-            .map(|msg_id| {
-                MESSAGES_SENT.inc();
-                info!(
-                    "Broadcasted own state data ({} bytes), Message ID: {}",
-                    msg_bytes.len(),
-                    msg_id
-                );
+                info!("Broadcasted {log_info}: {msg_id}");
             })
             .map_err(P2PError::Broadcast)
     }

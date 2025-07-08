@@ -1,7 +1,6 @@
 p2p_address = "/ip4/0.0.0.0/tcp/8071"
-local_full_p2p_address = "/ip4/0.0.0.0/tcp/8071/p2p/12D3KooWGGG4kMNWm4eJFT99GGeJ4CMLdsZx7Z7MdioLEqGVzTYS"
+peers = ["/ip4/127.0.0.1/tcp/8000/p2p/12D3KooWJXhhf8xDm8XH1CSBjLbemw7H384NQZwuexiRvqqFgZhC"]
 api_address = "127.0.0.1:9071"
-peers = []
 genesis_validator = "2119707c4caf16139cfb5c09c4dcc9bf9cfe6808b571c108d739f49cc14793b9"
 target_block_time = 60000
 difficulty = 100
@@ -11,6 +10,7 @@ zk_enabled = false
 mining_threads = 1
 num_chains = 1
 mining_chain_id = 0
+network_id = "hyperdag-testnet"
 
 [logging]
 level = "info"
