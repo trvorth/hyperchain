@@ -1,5 +1,8 @@
-use crate::hyperdag::{HomomorphicEncrypted, HyperDAG, LatticeSignature};
+use crate::hyperdag::{
+    HomomorphicEncrypted, HyperDAG, LatticeSignature, DEV_ADDRESS, DEV_FEE_RATE, UTXO,
+};
 use crate::omega;
+// use crate::wallet::WalletError; // Removed unused import
 use hex;
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak512};
@@ -12,8 +15,6 @@ use tokio::sync::RwLock;
 use tracing::instrument;
 use zeroize::Zeroize;
 
-pub const DEV_ADDRESS: &str = "2119707c4caf16139cfb5c09c4dcc9bf9cfe6808b571c108d739f49cc14793b9";
-pub const DEV_FEE_RATE: f64 = 0.0304;
 const MAX_TRANSACTIONS_PER_MINUTE: u64 = 1000;
 
 #[derive(Error, Debug)]
@@ -57,15 +58,6 @@ pub struct Output {
     pub address: String,
     pub amount: u64,
     pub homomorphic_encrypted: HomomorphicEncrypted,
-}
-
-#[derive(Clone, Serialize, Deserialize, Debug)]
-pub struct UTXO {
-    pub address: String,
-    pub amount: u64,
-    pub tx_id: String,
-    pub output_index: u32,
-    pub explorer_link: String,
 }
 
 #[derive(Debug)]
@@ -328,39 +320,64 @@ impl Transaction {
             return Err(TransactionError::LatticeSignatureVerification);
         }
 
-        let mut total_input_value = 0;
-        for input_val in &self.inputs {
-            let utxo_id = format!("{}_{}", input_val.tx_id, input_val.output_index);
-            let utxo_entry = utxos.get(&utxo_id).ok_or_else(|| {
-                TransactionError::InvalidStructure(format!("UTXO {utxo_id} not found for input"))
-            })?;
-            if utxo_entry.address != self.sender {
-                return Err(TransactionError::InvalidStructure(format!(
-                    "Input UTXO {} does not belong to sender {}",
-                    utxo_id, self.sender
-                )));
-            }
-            total_input_value += utxo_entry.amount;
-        }
-
-        let calculated_sum_of_outputs = self.outputs.iter().map(|o| o.amount).sum::<u64>();
-
         if self.inputs.is_empty() {
-            let expected_reward = dag
-                .emission
-                .calculate_reward(self.timestamp)
-                .map_err(TransactionError::EmissionError)?;
+            // --- COINBASE TRANSACTION VALIDATION ---
             if self.fee != 0 {
                 return Err(TransactionError::InvalidStructure(
                     "Coinbase transaction fee must be 0".to_string(),
                 ));
             }
-            if calculated_sum_of_outputs != expected_reward {
+
+            let expected_reward = dag
+                .emission
+                .calculate_reward(self.timestamp)
+                .map_err(|e| TransactionError::EmissionError(e.to_string()))?;
+
+            let total_output_amount: u64 = self.outputs.iter().map(|o| o.amount).sum();
+
+            if total_output_amount != expected_reward {
+                return Err(TransactionError::InvalidStructure(format!(
+                    "Invalid coinbase transaction output sum: expected {expected_reward}, got {total_output_amount}"
+                )));
+            }
+
+            let dev_fee_expected = (expected_reward as f64 * DEV_FEE_RATE).round() as u64;
+            let miner_reward_expected = expected_reward - dev_fee_expected;
+
+            let has_miner_reward = self
+                .outputs
+                .iter()
+                .any(|o| o.address == self.receiver && o.amount == miner_reward_expected);
+            let has_dev_fee = self
+                .outputs
+                .iter()
+                .any(|o| o.address == DEV_ADDRESS && o.amount == dev_fee_expected);
+
+            if !has_miner_reward {
                 return Err(TransactionError::InvalidStructure(
-                    format!("Invalid coinbase transaction output sum: expected {expected_reward}, got {calculated_sum_of_outputs}"),
+                    "Missing or incorrect miner reward in coinbase transaction".to_string(),
                 ));
             }
+            if !has_dev_fee {
+                return Err(TransactionError::MissingDevFee);
+            }
         } else {
+            // --- REGULAR TRANSACTION VALIDATION ---
+            let mut total_input_value = 0;
+            for input_val in &self.inputs {
+                let utxo_id = format!("{}_{}", input_val.tx_id, input_val.output_index);
+                let utxo_entry = utxos.get(&utxo_id).ok_or_else(|| {
+                    TransactionError::InvalidStructure(format!("UTXO {utxo_id} not found for input"))
+                })?;
+                if utxo_entry.address != self.sender {
+                    return Err(TransactionError::InvalidStructure(format!(
+                        "Input UTXO {} does not belong to sender {}",
+                        utxo_id, self.sender
+                    )));
+                }
+                total_input_value += utxo_entry.amount;
+            }
+
             let dev_fee_on_transfer = (self.amount as f64 * DEV_FEE_RATE).round() as u64;
             if dev_fee_on_transfer > 0
                 && !self

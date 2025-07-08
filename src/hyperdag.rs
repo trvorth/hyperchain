@@ -1,6 +1,6 @@
 use crate::emission::Emission;
 use crate::mempool::Mempool;
-use crate::transaction::{Transaction, TransactionError, UTXO};
+use crate::transaction::{Transaction, TransactionError};
 use ed25519_dalek::{Signature as DalekSignature, Signer, SigningKey, Verifier, VerifyingKey};
 use hex;
 use log::{error, info, warn};
@@ -21,10 +21,12 @@ use tokio::sync::RwLock;
 use tokio::task;
 use tracing::instrument;
 
-const MAX_BLOCK_SIZE: usize = 20_000_000;
+// --- PUBLIC CONSTANTS ---
+pub const MAX_BLOCK_SIZE: usize = 20_000_000;
 pub const MAX_TRANSACTIONS_PER_BLOCK: usize = 25_000;
-const DEV_ADDRESS: &str = "2119707c4caf16139cfb5c09c4dcc9bf9cfe6808b571c108d739f49cc14793b9";
-const DEV_FEE_RATE: f64 = 0.0304;
+pub const DEV_ADDRESS: &str = "2119707c4caf16139cfb5c09c4dcc9bf9cfe6808b571c108d739f49cc14793b9";
+pub const DEV_FEE_RATE: f64 = 0.0304;
+
 const FINALIZATION_DEPTH: u64 = 8;
 const SHARD_THRESHOLD: u32 = 3;
 const TEMPORAL_CONSENSUS_WINDOW: u64 = 600;
@@ -37,6 +39,16 @@ lazy_static::lazy_static! {
     static ref BLOCKS_PROCESSED: IntCounter = register_int_counter!("blocks_processed_total", "Total blocks processed").unwrap();
     static ref TRANSACTIONS_PROCESSED: IntCounter = register_int_counter!("transactions_processed_total", "Total transactions processed").unwrap();
     static ref ANOMALIES_DETECTED: IntCounter = register_int_counter!("anomalies_detected_total", "Total anomalies detected").unwrap();
+}
+
+// --- PUBLIC STRUCT ---
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct UTXO {
+    pub address: String,
+    pub amount: u64,
+    pub tx_id: String,
+    pub output_index: u32,
+    pub explorer_link: String,
 }
 
 #[derive(Error, Debug)]
@@ -79,7 +91,6 @@ pub enum HyperDAGError {
     JoinError(#[from] task::JoinError),
 }
 
-// All structs (SigningData, CrossChainSwapParams, etc.) are unchanged.
 pub struct SigningData<'a> {
     pub parents: &'a [String],
     pub transactions: &'a [Transaction],
@@ -509,7 +520,7 @@ impl HyperDAG {
         })
     }
 
-    #[instrument]
+    #[instrument(skip(self, block, utxos_arc))]
     pub async fn add_block(
         &mut self,
         block: HyperBlock,
@@ -605,11 +616,11 @@ impl HyperDAG {
         let id_bytes = block_for_db.id.as_bytes().to_vec();
         let block_bytes = serde_json::to_vec(&block_for_db)?;
         task::spawn_blocking(move || db_clone.put(id_bytes, block_bytes))
-            .await? 
-            .map_err(|e| HyperDAGError::DatabaseError(e.to_string()))?; 
+            .await?
+            .map_err(|e| HyperDAGError::DatabaseError(e.to_string()))?;
 
         self.emission
-            .update_supply(block_for_db.reward) 
+            .update_supply(block_for_db.reward)
             .map_err(HyperDAGError::EmissionError)?;
 
         self.finalize_blocks().await?;
@@ -859,6 +870,7 @@ impl HyperDAG {
         block: &HyperBlock,
         utxos_arc: &Arc<RwLock<HashMap<String, UTXO>>>,
     ) -> Result<bool, HyperDAGError> {
+
         let serialized_size = serde_json::to_vec(&block)?.len();
         if block.transactions.len() > MAX_TRANSACTIONS_PER_BLOCK || serialized_size > MAX_BLOCK_SIZE
         {
@@ -885,9 +897,18 @@ impl HyperDAG {
             merkle_root: &block.merkle_root,
         };
         let signature_data = HyperBlock::serialize_for_signing(&signing_data)?;
+        let expected_id = hex::encode(Keccak256::digest(&signature_data));
+        if block.id != expected_id {
+            return Err(HyperDAGError::InvalidBlock(format!(
+                "Block ID mismatch. Expected: {}, Got: {}",
+                expected_id, block.id
+            )));
+        }
+
         if !block.lattice_signature.verify(&signature_data) {
             return Err(HyperDAGError::LatticeSignatureVerification);
         }
+
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
         if block.timestamp > now + TEMPORAL_CONSENSUS_WINDOW
             || block.timestamp < now.saturating_sub(TEMPORAL_CONSENSUS_WINDOW)
@@ -910,14 +931,16 @@ impl HyperDAG {
                 )));
             }
         }
-        let target = u64::MAX / block.difficulty.max(1);
+        let target_hash_bytes =
+            crate::miner::Miner::calculate_target_from_difficulty(block.difficulty);
         let block_pow_hash = block.hash();
-        let hash_value_str = &block_pow_hash[..std::cmp::min(16, block_pow_hash.len())];
-        let hash_value = u64::from_str_radix(hash_value_str, 16).unwrap_or(u64::MAX);
-        if hash_value > target {
-            return Err(HyperDAGError::InvalidBlock(format!(
-                "Difficulty not met. Hash value {hash_value} > target {target}"
-            )));
+        if !crate::miner::Miner::hash_meets_target(
+            &hex::decode(block_pow_hash).unwrap(),
+            &target_hash_bytes,
+        ) {
+            return Err(HyperDAGError::InvalidBlock(
+                "Difficulty not met.".to_string(),
+            ));
         }
         {
             let blocks_guard = self.blocks.read().await;
@@ -998,29 +1021,31 @@ impl HyperDAG {
         Ok(anomaly_score)
     }
     #[instrument]
-    pub async fn validate_transaction(
-        &self,
-        tx: &Transaction,
-        utxos_map: &HashMap<String, UTXO>,
-    ) -> bool {
-        if tx.inputs.is_empty() {
-            let expected_reward = match self.emission.calculate_reward(tx.timestamp) {
-                Ok(reward) => reward,
-                Err(_) => return false,
-            };
-            let dev_fee_expected = (expected_reward as f64 * DEV_FEE_RATE) as u64;
-            let total_output_amount: u64 = tx.outputs.iter().map(|o_val| o_val.amount).sum();
-            !tx.outputs.is_empty()
-                && tx
-                    .outputs
-                    .iter()
-                    .any(|o_val| o_val.address == DEV_ADDRESS && o_val.amount == dev_fee_expected)
-                && total_output_amount == expected_reward
-                && tx.fee == 0
-        } else {
-            tx.verify(self, utxos_map).await.is_ok()
-        }
+pub async fn validate_transaction(
+    &self,
+    tx: &Transaction,
+    utxos_map: &HashMap<String, UTXO>,
+) -> bool {
+    if tx.inputs.is_empty() { // This identifies a coinbase transaction
+        let expected_reward = match self.emission.calculate_reward(tx.timestamp) {
+            Ok(reward) => reward,
+            Err(_) => return false,
+        };
+        let dev_fee_expected = (expected_reward as f64 * DEV_FEE_RATE).round() as u64;
+        let total_output_amount: u64 = tx.outputs.iter().map(|o_val| o_val.amount).sum();
+        
+        // This is the flawed logic
+        !tx.outputs.is_empty()
+            && tx
+                .outputs
+                .iter()
+                .any(|o_val| o_val.address == DEV_ADDRESS && o_val.amount == dev_fee_expected) // Checks for ANY dev fee output
+            && total_output_amount == expected_reward
+            && tx.fee == 0
+    } else {
+        tx.verify(self, utxos_map).await.is_ok()
     }
+}
     #[instrument]
     pub async fn adjust_difficulty(
         difficulty_lock: Arc<RwLock<u64>>,

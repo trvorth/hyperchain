@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  hyperchain-node:
+    build: .
+    # Assigns a friendly name to the container.
+    container_name: hyperchain-node
+    # Restarts the container automatically if it crashes.
+    restart: unless-stopped
+    
+    # Format: "HOST:CONTAINER"
+    ports:
+      - "8080:8080" # API Port
+      - "4001:4001" # P2P Port
+      
+    # Mounts local directories into the container for persistent data.
+    # Format: "HOST_PATH:CONTAINER_PATH"
+    volumes:
+      # Mount your local config.toml to /data/config.toml inside the container.
+      - ./config.toml:/data/config.toml:ro # 'ro' for read-only
+      # Mount your local wallet.key to /data/wallet.key inside the container.
+      - ./wallet.key:/data/wallet.key:ro # 'ro' for read-only
+      # Mount a local directory to store the blockchain database.
+      - ./hyperdag_db:/data/db
+
+    # Sets environment variables inside the container.
+    environment:
+      - RUST_LOG=hyperchain=info,saga=debug
+      - RUST_BACKTRACE=1

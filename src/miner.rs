@@ -1,10 +1,8 @@
-// src/miner.rs
-
-use crate::emission::Emission;
-use crate::hyperdag::{HyperBlock, HyperDAG};
-use crate::transaction::{Output, Transaction, DEV_ADDRESS, DEV_FEE_RATE};
+use crate::hyperdag::{HyperBlock, HyperDAG, LatticeSignature, SigningData};
+use crate::hyperdag::{DEV_ADDRESS, DEV_FEE_RATE};
+use crate::transaction::{Output, Transaction};
 use anyhow::Result;
-use ed25519_dalek::SigningKey; // <-- ADD THIS IMPORT
+use ed25519_dalek::SigningKey;
 use hex;
 use rand::Rng;
 use rayon::prelude::*;
@@ -74,259 +72,8 @@ pub struct Miner {
     use_gpu: bool,
     _zk_enabled: bool,
     threads: usize,
-    emission: Emission,
 }
 
-impl Miner {
-    #[instrument]
-    pub fn new(config: MinerConfig) -> Result<Self> {
-        let address_regex = Regex::new(r"^[0-9a-fA-F]{64}$")?;
-        if !address_regex.is_match(&config.address) {
-            return Err(MiningError::InvalidAddress(format!(
-                "Invalid miner address format: {}",
-                config.address
-            ))
-            .into());
-        }
-        let difficulty = u64::from_str_radix(config.difficulty_hex.trim_start_matches("0x"), 16)?;
-        let effective_use_gpu = config.use_gpu && cfg!(feature = "gpu");
-        if config.use_gpu && !effective_use_gpu {
-            warn!("GPU mining enabled in config but 'gpu' feature is not compiled. Disabling GPU for this session.");
-        }
-        let effective_zk_enabled = config.zk_enabled && cfg!(feature = "zk");
-        if config.zk_enabled && !effective_zk_enabled {
-            warn!("ZK proofs enabled in config but 'zk' feature is not compiled. Disabling ZK for this session.");
-        }
-        let genesis_timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-
-        Ok(Self {
-            address: config.address,
-            dag: config.dag,
-            difficulty,
-            target_block_time: config.target_block_time,
-            use_gpu: effective_use_gpu,
-            _zk_enabled: effective_zk_enabled,
-            threads: config.threads.max(1),
-            emission: Emission::default_with_timestamp(genesis_timestamp, config.num_chains),
-        })
-    }
-
-    #[instrument(skip(self, tips, transactions, signing_key_bytes))]
-    pub fn mine(
-        &self,
-        chain_id: u32,
-        tips: Vec<String>,
-        transactions: Vec<Transaction>,
-        signing_key_bytes: &[u8],
-    ) -> Result<Option<HyperBlock>, MiningError> {
-        let dag_lock = self.dag.blocking_read();
-        let is_genesis_chain = dag_lock
-            .blocks
-            .blocking_read()
-            .values()
-            .all(|b| !b.parents.is_empty());
-        if tips.is_empty() && !is_genesis_chain {
-            warn!("Attempted to mine with no tips on a non-genesis chain. Skipping round.");
-            return Ok(None);
-        }
-        drop(dag_lock);
-
-        let start_time = SystemTime::now();
-        let timestamp = start_time.duration_since(UNIX_EPOCH)?.as_secs();
-
-        let final_reward = self.emission.calculate_reward(timestamp)?;
-        let dev_fee = (final_reward as f64 * DEV_FEE_RATE).round() as u64;
-        let miner_reward = final_reward.saturating_sub(dev_fee);
-
-        // --- FIX: Derive public key from private key for Homomorphic Encryption ---
-        let signing_key = SigningKey::from_bytes(
-            signing_key_bytes
-                .try_into()
-                .map_err(|_| MiningError::KeyConversion)?,
-        );
-        let public_key_bytes = signing_key.verifying_key().to_bytes();
-
-        let mut coinbase_outputs = vec![Output {
-            address: self.address.clone(),
-            amount: miner_reward,
-            homomorphic_encrypted: crate::hyperdag::HomomorphicEncrypted::new(
-                miner_reward,
-                &public_key_bytes, // Use public key
-            ),
-        }];
-        if dev_fee > 0 {
-            coinbase_outputs.push(Output {
-                address: DEV_ADDRESS.to_string(),
-                amount: dev_fee,
-                homomorphic_encrypted: crate::hyperdag::HomomorphicEncrypted::new(
-                    dev_fee,
-                    &public_key_bytes, // Use public key
-                ),
-            });
-        }
-
-        let coinbase_tx = Transaction::new_coinbase(
-            self.address.clone(),
-            final_reward,
-            signing_key_bytes,
-            coinbase_outputs,
-        )?;
-        let mut block_transactions = vec![coinbase_tx];
-        block_transactions.extend(transactions);
-
-        let merkle_root = HyperBlock::compute_merkle_root(&block_transactions)?;
-
-        let pre_hash_data = {
-            let mut hasher = Keccak256::new();
-            hasher.update(chain_id.to_le_bytes());
-            hasher.update(merkle_root.as_bytes());
-            hasher.update(timestamp.to_be_bytes());
-            hasher.update(self.address.as_bytes());
-            for parent in &tips {
-                hasher.update(parent.as_bytes());
-            }
-            hasher.update(self.difficulty.to_le_bytes());
-            hasher.finalize().to_vec()
-        };
-
-        if self.use_gpu {
-            warn!("GPU mining is enabled, but the implementation currently only supports CPU mining. Falling back to CPU.");
-        }
-
-        let target_hash_bytes = Miner::calculate_target_from_difficulty(self.difficulty);
-        let timeout_duration = Duration::from_secs(self.target_block_time);
-
-        let mining_result = self.mine_cpu(
-            &pre_hash_data,
-            &target_hash_bytes,
-            start_time,
-            timeout_duration,
-        )?;
-
-        if let Some((found_nonce, effort)) = mining_result {
-            let mut final_block = HyperBlock {
-                chain_id,
-                id: String::new(),
-                parents: tips,
-                transactions: block_transactions,
-                difficulty: self.difficulty,
-                validator: self.address.clone(),
-                miner: self.address.clone(),
-                nonce: found_nonce,
-                timestamp,
-                reward: final_reward,
-                effort,
-                cross_chain_references: vec![],
-                merkle_root,
-                lattice_signature: crate::hyperdag::LatticeSignature::sign(signing_key_bytes, &[])?,
-                cross_chain_swaps: vec![],
-                homomorphic_encrypted: vec![],
-                smart_contracts: vec![],
-            };
-
-            let final_signing_data = crate::hyperdag::SigningData {
-                parents: &final_block.parents,
-                transactions: &final_block.transactions,
-                timestamp: final_block.timestamp,
-                nonce: final_block.nonce,
-                difficulty: final_block.difficulty,
-                validator: &final_block.validator,
-                miner: &final_block.miner,
-                chain_id: final_block.chain_id,
-                merkle_root: &final_block.merkle_root,
-            };
-            let final_signature_payload = HyperBlock::serialize_for_signing(&final_signing_data)?;
-            final_block.lattice_signature = crate::hyperdag::LatticeSignature::sign(
-                signing_key_bytes,
-                &final_signature_payload,
-            )?;
-            final_block.id = hex::encode(Keccak256::digest(&final_signature_payload));
-
-            let final_pow_hash = final_block.hash();
-            if !Miner::hash_meets_target(&hex::decode(final_pow_hash).unwrap(), &target_hash_bytes)
-            {
-                warn!("Miner found a nonce but the final block hash was invalid. This may indicate a logic error in PoW hashing.");
-                return Ok(None);
-            }
-
-            info!(
-                "Mined valid block {} with nonce {} and effort {}. Reward: {} $HCN",
-                final_block.id, found_nonce, effort, final_reward
-            );
-
-            return Ok(Some(final_block));
-        }
-
-        Ok(None)
-    }
-
-    fn mine_cpu(
-        &self,
-        block_header_data: &[u8],
-        target_hash_value: &[u8],
-        start_time: SystemTime,
-        timeout_duration: Duration,
-    ) -> Result<Option<(u64, u64)>, MiningError> {
-        let thread_pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(self.threads)
-            .build()?;
-        let found_signal = Arc::new(AtomicBool::new(false));
-        let hashes_tried = Arc::new(AtomicU64::new(0));
-
-        let result = thread_pool.install(|| {
-            let nonce_start = rand::thread_rng().gen::<u64>();
-
-            (nonce_start..u64::MAX)
-                .into_par_iter()
-                .find_map_any(|current_nonce| {
-                    if found_signal.load(Ordering::Relaxed) {
-                        return None;
-                    }
-                    let count = hashes_tried.fetch_add(1, Ordering::Relaxed);
-
-                    if count % 1_000_000 == 0 {
-                        if let Ok(elapsed) = start_time.elapsed() {
-                            if elapsed > timeout_duration {
-                                found_signal.store(true, Ordering::Relaxed);
-                                return None;
-                            }
-                        }
-                    }
-
-                    let mut hasher = Keccak256::new();
-                    hasher.update(block_header_data);
-                    hasher.update(current_nonce.to_le_bytes());
-                    let pow_hash = hasher.finalize();
-
-                    if Miner::hash_meets_target(&pow_hash, target_hash_value) {
-                        found_signal.store(true, Ordering::Relaxed);
-                        return Some(current_nonce);
-                    }
-                    None
-                })
-        });
-
-        let final_hash_count = hashes_tried.load(Ordering::Relaxed);
-        Ok(result.map(|nonce| (nonce, final_hash_count)))
-    }
-
-    fn calculate_target_from_difficulty(difficulty_value: u64) -> Vec<u8> {
-        if difficulty_value == 0 {
-            return U256::MAX.to_big_endian_vec();
-        }
-        let diff = U256::from(difficulty_value);
-        let max_target = U256::MAX;
-        let target_num = max_target / diff;
-
-        target_num.to_big_endian_vec()
-    }
-
-    fn hash_meets_target(hash_bytes: &[u8], target_bytes: &[u8]) -> bool {
-        hash_bytes <= target_bytes
-    }
-}
-
-// U256 struct and its methods are correct from the previous fix.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 struct U256([u64; 4]);
 
@@ -420,5 +167,230 @@ impl U256 {
             }
         }
         (quotient, remainder)
+    }
+}
+
+impl Miner {
+    #[instrument]
+    pub fn new(config: MinerConfig) -> Result<Self> {
+        let address_regex = Regex::new(r"^[0-9a-fA-F]{64}$")?;
+        if !address_regex.is_match(&config.address) {
+            return Err(MiningError::InvalidAddress(format!(
+                "Invalid miner address format: {}",
+                config.address
+            ))
+            .into());
+        }
+        let difficulty = u64::from_str_radix(config.difficulty_hex.trim_start_matches("0x"), 16)?;
+        let effective_use_gpu = config.use_gpu && cfg!(feature = "gpu");
+        if config.use_gpu && !effective_use_gpu {
+            warn!("GPU mining enabled in config but 'gpu' feature is not compiled. Disabling GPU for this session.");
+        }
+        let effective_zk_enabled = config.zk_enabled && cfg!(feature = "zk");
+        if config.zk_enabled && !effective_zk_enabled {
+            warn!("ZK proofs enabled in config but 'zk' feature is not compiled. Disabling ZK for this session.");
+        }
+
+        Ok(Self {
+            address: config.address,
+            dag: config.dag,
+            difficulty,
+            target_block_time: config.target_block_time,
+            use_gpu: effective_use_gpu,
+            _zk_enabled: effective_zk_enabled,
+            threads: config.threads.max(1),
+        })
+    }
+
+    #[instrument(skip(self, tips, transactions, signing_key_bytes))]
+    pub fn mine(
+        &self,
+        chain_id: u32,
+        tips: Vec<String>,
+        transactions: Vec<Transaction>,
+        signing_key_bytes: &[u8],
+    ) -> Result<Option<HyperBlock>, MiningError> {
+        let start_time = SystemTime::now();
+        let timestamp = start_time.duration_since(UNIX_EPOCH)?.as_secs();
+
+        let final_reward = {
+            let dag_lock = self.dag.blocking_read();
+            dag_lock.emission.calculate_reward(timestamp)?
+        };
+
+        let dev_fee = (final_reward as f64 * DEV_FEE_RATE).round() as u64;
+        let miner_reward = final_reward.saturating_sub(dev_fee);
+
+        let signing_key = SigningKey::from_bytes(
+            signing_key_bytes
+                .try_into()
+                .map_err(|_| MiningError::KeyConversion)?,
+        );
+        let public_key_bytes = signing_key.verifying_key().to_bytes();
+
+        let coinbase_outputs = vec![
+            Output {
+                address: self.address.clone(),
+                amount: miner_reward,
+                homomorphic_encrypted: crate::hyperdag::HomomorphicEncrypted::new(
+                    miner_reward,
+                    &public_key_bytes,
+                ),
+            },
+            Output {
+                address: DEV_ADDRESS.to_string(),
+                amount: dev_fee,
+                homomorphic_encrypted: crate::hyperdag::HomomorphicEncrypted::new(
+                    dev_fee,
+                    &public_key_bytes,
+                ),
+            },
+        ];
+
+        let coinbase_tx = Transaction::new_coinbase(
+            self.address.clone(),
+            final_reward,
+            signing_key_bytes,
+            coinbase_outputs,
+        )?;
+
+        let mut block_transactions = vec![coinbase_tx];
+        block_transactions.extend(transactions);
+
+        let merkle_root = HyperBlock::compute_merkle_root(&block_transactions)?;
+
+        let mut block_template = HyperBlock {
+            chain_id,
+            id: String::new(),
+            parents: tips,
+            transactions: block_transactions,
+            difficulty: self.difficulty,
+            validator: self.address.clone(),
+            miner: self.address.clone(),
+            nonce: 0,
+            timestamp,
+            reward: final_reward,
+            effort: 0,
+            cross_chain_references: vec![],
+            merkle_root,
+            lattice_signature: LatticeSignature::sign(signing_key_bytes, &[])?,
+            cross_chain_swaps: vec![],
+            homomorphic_encrypted: vec![],
+            smart_contracts: vec![],
+        };
+
+        if self.use_gpu {
+            warn!("GPU mining is enabled, but the implementation currently only supports CPU mining. Falling back to CPU.");
+        }
+
+        let target_hash_bytes = Miner::calculate_target_from_difficulty(self.difficulty);
+        let timeout_duration = Duration::from_secs(self.target_block_time);
+
+        let mining_result =
+            self.mine_cpu(&block_template, &target_hash_bytes, start_time, timeout_duration)?;
+
+        if let Some((found_nonce, effort)) = mining_result {
+            block_template.nonce = found_nonce;
+            block_template.effort = effort;
+
+            let final_signing_data = SigningData {
+                parents: &block_template.parents,
+                transactions: &block_template.transactions,
+                timestamp: block_template.timestamp,
+                nonce: block_template.nonce,
+                difficulty: block_template.difficulty,
+                validator: &block_template.validator,
+                miner: &block_template.miner,
+                chain_id: block_template.chain_id,
+                merkle_root: &block_template.merkle_root,
+            };
+
+            let final_signature_payload = HyperBlock::serialize_for_signing(&final_signing_data)?;
+            block_template.lattice_signature =
+                LatticeSignature::sign(signing_key_bytes, &final_signature_payload)?;
+            block_template.id = hex::encode(Keccak256::digest(&final_signature_payload));
+
+            let final_pow_hash = block_template.hash();
+            if !Miner::hash_meets_target(&hex::decode(&final_pow_hash).unwrap(), &target_hash_bytes)
+            {
+                warn!("Miner found a nonce but the final block hash was invalid. This may indicate a logic error in PoW hashing.");
+                return Ok(None);
+            }
+
+            info!(
+                "Mined valid block {} with nonce {} and effort {}. Reward: {} $HCN",
+                block_template.id, found_nonce, effort, final_reward
+            );
+
+            return Ok(Some(block_template));
+        }
+
+        Ok(None)
+    }
+
+    fn mine_cpu(
+        &self,
+        block_template: &HyperBlock,
+        target_hash_value: &[u8],
+        start_time: SystemTime,
+        timeout_duration: Duration,
+    ) -> Result<Option<(u64, u64)>, MiningError> {
+        let thread_pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(self.threads)
+            .build()?;
+        let found_signal = Arc::new(AtomicBool::new(false));
+        let hashes_tried = Arc::new(AtomicU64::new(0));
+
+        let result = thread_pool.install(|| {
+            let nonce_start = rand::thread_rng().gen::<u64>();
+
+            (nonce_start..u64::MAX)
+                .into_par_iter()
+                .find_map_any(|current_nonce| {
+                    if found_signal.load(Ordering::Relaxed) {
+                        return None;
+                    }
+                    let count = hashes_tried.fetch_add(1, Ordering::Relaxed);
+
+                    if count % 1_000_000 == 0 {
+                        if let Ok(elapsed) = start_time.elapsed() {
+                            if elapsed > timeout_duration {
+                                found_signal.store(true, Ordering::Relaxed);
+                                return None;
+                            }
+                        }
+                    }
+
+                    let mut temp_block = block_template.clone();
+                    temp_block.nonce = current_nonce;
+
+                    let pow_hash = temp_block.hash();
+
+                    if Miner::hash_meets_target(&hex::decode(&pow_hash).unwrap(), target_hash_value)
+                    {
+                        found_signal.store(true, Ordering::Relaxed);
+                        return Some(current_nonce);
+                    }
+                    None
+                })
+        });
+
+        let final_hash_count = hashes_tried.load(Ordering::Relaxed);
+        Ok(result.map(|nonce| (nonce, final_hash_count)))
+    }
+
+    pub fn calculate_target_from_difficulty(difficulty_value: u64) -> Vec<u8> {
+        if difficulty_value == 0 {
+            return U256::MAX.to_big_endian_vec();
+        }
+        let diff = U256::from(difficulty_value);
+        let max_target = U256::MAX;
+        let target_num = max_target / diff;
+
+        target_num.to_big_endian_vec()
+    }
+
+    pub fn hash_meets_target(hash_bytes: &[u8], target_bytes: &[u8]) -> bool {
+        hash_bytes <= target_bytes
     }
 }
