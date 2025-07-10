@@ -1,17 +1,13 @@
-use crate::hyperdag::{HyperBlock, HyperDAG, LatticeSignature, SigningData};
-use crate::hyperdag::{DEV_ADDRESS, DEV_FEE_RATE};
-use crate::transaction::{Output, Transaction};
+use crate::hyperdag::HyperBlock;
 use anyhow::Result;
-use ed25519_dalek::SigningKey;
 use hex;
 use rand::Rng;
 use rayon::prelude::*;
 use regex::Regex;
-use sha3::{Digest, Keccak256};
 use std::ops::Div;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime};
 use thiserror::Error;
 use tokio::sync::RwLock;
 use tracing::{info, instrument, warn};
@@ -38,6 +34,8 @@ pub enum MiningError {
     ThreadPool(String),
     #[error("Key conversion error")]
     KeyConversion,
+    #[error("Mining operation timed out or was cancelled without finding a solution")]
+    TimeoutOrCancelled,
 }
 
 impl From<String> for MiningError {
@@ -55,7 +53,7 @@ impl From<rayon::ThreadPoolBuildError> for MiningError {
 #[derive(Debug)]
 pub struct MinerConfig {
     pub address: String,
-    pub dag: Arc<RwLock<HyperDAG>>,
+    pub dag: Arc<RwLock<crate::hyperdag::HyperDAG>>,
     pub difficulty_hex: String,
     pub target_block_time: u64,
     pub use_gpu: bool,
@@ -65,11 +63,11 @@ pub struct MinerConfig {
 }
 #[derive(Clone, Debug)]
 pub struct Miner {
-    address: String,
-    dag: Arc<RwLock<HyperDAG>>,
-    difficulty: u64,
+    _address: String,
+    _dag: Arc<RwLock<crate::hyperdag::HyperDAG>>,
+    _difficulty: u64,
     target_block_time: u64,
-    use_gpu: bool,
+    _use_gpu: bool,
     _zk_enabled: bool,
     threads: usize,
 }
@@ -192,140 +190,49 @@ impl Miner {
         }
 
         Ok(Self {
-            address: config.address,
-            dag: config.dag,
-            difficulty,
+            _address: config.address,
+            _dag: config.dag,
+            _difficulty: difficulty,
             target_block_time: config.target_block_time,
-            use_gpu: effective_use_gpu,
+            _use_gpu: effective_use_gpu,
             _zk_enabled: effective_zk_enabled,
             threads: config.threads.max(1),
         })
     }
 
-    #[instrument(skip(self, tips, transactions, signing_key_bytes))]
-    pub fn mine(
-        &self,
-        chain_id: u32,
-        tips: Vec<String>,
-        transactions: Vec<Transaction>,
-        signing_key_bytes: &[u8],
-    ) -> Result<Option<HyperBlock>, MiningError> {
+    /// Solves the Proof-of-Work for a given block template by finding a valid nonce.
+    /// This is the primary mining function called by the node's mining loop.
+    /// It modifies the block in-place with the found nonce and effort.
+    #[instrument(skip(self, block_template))]
+    pub fn solve_pow(&self, block_template: &mut HyperBlock) -> Result<(), MiningError> {
         let start_time = SystemTime::now();
-        let timestamp = start_time.duration_since(UNIX_EPOCH)?.as_secs();
+        let timeout_duration = Duration::from_secs(self.target_block_time);
+        let target_hash_bytes = Miner::calculate_target_from_difficulty(block_template.difficulty);
 
-        let final_reward = {
-            let dag_lock = self.dag.blocking_read();
-            dag_lock.emission.calculate_reward(timestamp)?
-        };
-
-        let dev_fee = (final_reward as f64 * DEV_FEE_RATE).round() as u64;
-        let miner_reward = final_reward.saturating_sub(dev_fee);
-
-        let signing_key = SigningKey::from_bytes(
-            signing_key_bytes
-                .try_into()
-                .map_err(|_| MiningError::KeyConversion)?,
-        );
-        let public_key_bytes = signing_key.verifying_key().to_bytes();
-
-        let coinbase_outputs = vec![
-            Output {
-                address: self.address.clone(),
-                amount: miner_reward,
-                homomorphic_encrypted: crate::hyperdag::HomomorphicEncrypted::new(
-                    miner_reward,
-                    &public_key_bytes,
-                ),
-            },
-            Output {
-                address: DEV_ADDRESS.to_string(),
-                amount: dev_fee,
-                homomorphic_encrypted: crate::hyperdag::HomomorphicEncrypted::new(
-                    dev_fee,
-                    &public_key_bytes,
-                ),
-            },
-        ];
-
-        let coinbase_tx = Transaction::new_coinbase(
-            self.address.clone(),
-            final_reward,
-            signing_key_bytes,
-            coinbase_outputs,
-        )?;
-
-        let mut block_transactions = vec![coinbase_tx];
-        block_transactions.extend(transactions);
-
-        let merkle_root = HyperBlock::compute_merkle_root(&block_transactions)?;
-
-        let mut block_template = HyperBlock {
-            chain_id,
-            id: String::new(),
-            parents: tips,
-            transactions: block_transactions,
-            difficulty: self.difficulty,
-            validator: self.address.clone(),
-            miner: self.address.clone(),
-            nonce: 0,
-            timestamp,
-            reward: final_reward,
-            effort: 0,
-            cross_chain_references: vec![],
-            merkle_root,
-            lattice_signature: LatticeSignature::sign(signing_key_bytes, &[])?,
-            cross_chain_swaps: vec![],
-            homomorphic_encrypted: vec![],
-            smart_contracts: vec![],
-        };
-
-        if self.use_gpu {
-            warn!("GPU mining is enabled, but the implementation currently only supports CPU mining. Falling back to CPU.");
+        if self._use_gpu {
+            warn!("[GPU-MINE] GPU mining is enabled in config, but the implementation currently only supports CPU mining. Falling back to CPU.");
         }
 
-        let target_hash_bytes = Miner::calculate_target_from_difficulty(self.difficulty);
-        let timeout_duration = Duration::from_secs(self.target_block_time);
-
-        let mining_result =
-            self.mine_cpu(&block_template, &target_hash_bytes, start_time, timeout_duration)?;
+        let mining_result = self.mine_cpu(
+            block_template,
+            &target_hash_bytes,
+            start_time,
+            timeout_duration,
+        )?;
 
         if let Some((found_nonce, effort)) = mining_result {
             block_template.nonce = found_nonce;
             block_template.effort = effort;
 
-            let final_signing_data = SigningData {
-                parents: &block_template.parents,
-                transactions: &block_template.transactions,
-                timestamp: block_template.timestamp,
-                nonce: block_template.nonce,
-                difficulty: block_template.difficulty,
-                validator: &block_template.validator,
-                miner: &block_template.miner,
-                chain_id: block_template.chain_id,
-                merkle_root: &block_template.merkle_root,
-            };
-
-            let final_signature_payload = HyperBlock::serialize_for_signing(&final_signing_data)?;
-            block_template.lattice_signature =
-                LatticeSignature::sign(signing_key_bytes, &final_signature_payload)?;
-            block_template.id = hex::encode(Keccak256::digest(&final_signature_payload));
-
-            let final_pow_hash = block_template.hash();
-            if !Miner::hash_meets_target(&hex::decode(&final_pow_hash).unwrap(), &target_hash_bytes)
-            {
-                warn!("Miner found a nonce but the final block hash was invalid. This may indicate a logic error in PoW hashing.");
-                return Ok(None);
-            }
-
             info!(
-                "Mined valid block {} with nonce {} and effort {}. Reward: {} $HCN",
-                block_template.id, found_nonce, effort, final_reward
+                "PoW solved for block ID (pre-hash) {} with nonce {} and effort {}. Block is ready for finalization.",
+                block_template.id, found_nonce, effort
             );
 
-            return Ok(Some(block_template));
+            Ok(())
+        } else {
+            Err(MiningError::TimeoutOrCancelled)
         }
-
-        Ok(None)
     }
 
     fn mine_cpu(

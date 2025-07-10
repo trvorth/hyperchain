@@ -274,7 +274,7 @@ impl P2PServer {
                 noise::Config::new,
                 yamux::Config::default,
             )?
-            .with_behaviour(|_key| behaviour)
+            .with_behaviour(|_key| Ok(behaviour))
             .map_err(|e| P2PError::SwarmBuild(format!("Behaviour setup error: {e:?}")))?
             .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(60)))
             .build();
@@ -443,6 +443,10 @@ impl P2PServer {
         }
     }
 
+    // FIX: Correct the signature of `handle_swarm_event` for libp2p-swarm v0.46.0.
+    // The `SwarmEvent` enum in this version only takes one generic argument for the
+    // behaviour event. The connection error is now handled in specific variants
+    // like `ConnectionClosed` and `OutgoingConnectionError`.
     async fn handle_swarm_event(&mut self, event: SwarmEvent<NodeBehaviourEvent>) {
         match event {
             SwarmEvent::NewListenAddr { address, .. } => {
@@ -592,18 +596,30 @@ impl P2PServer {
             P2PCommand::BroadcastBlock(block) => {
                 self.broadcast_message(
                     NetworkMessageData::Block(block.clone()),
-                    0,
+                    0, // Topic index for blocks
                     &format!("block {}", block.id),
                 )
                 .await
             }
             P2PCommand::BroadcastTransaction(tx) => {
-                self.broadcast_message(
-                    NetworkMessageData::Transaction(tx.clone()),
-                    1,
-                    &format!("transaction {}", tx.id),
-                )
-                .await
+                let add_result = {
+                    let mempool_guard = self.mempool.read().await;
+                    let utxos_guard = self.utxos.read().await;
+                    let dag_guard = self.dag.read().await;
+                    mempool_guard.add_transaction(tx.clone(), &utxos_guard, &dag_guard).await
+                };
+
+                if let Err(e) = add_result {
+                     warn!("Failed to add locally submitted transaction {} to mempool before broadcasting: {}", tx.id, e);
+                } else {
+                     self.broadcast_message(
+                        NetworkMessageData::Transaction(tx.clone()),
+                        1, // Topic index for transactions
+                        &format!("transaction {}", tx.id),
+                    )
+                    .await?
+                }
+                Ok(())
             }
             P2PCommand::RequestState => {
                 self.broadcast_message(NetworkMessageData::StateRequest, 2, "state request")
@@ -743,9 +759,6 @@ impl P2PServer {
                 let (blocks, current_utxos) = dag_guard.get_state_snapshot(0).await;
                 drop(dag_guard);
 
-                let blocks_len = blocks.len();
-                let utxos_len = current_utxos.len();
-
                 if let Err(e) = context
                     .p2p_command_sender
                     .send(P2PCommand::BroadcastState(blocks, current_utxos))
@@ -753,8 +766,6 @@ impl P2PServer {
                 {
                     error!("Failed to send BroadcastState command: {e}");
                 }
-
-                warn!("Received StateRequest; static processing cannot send reply with {blocks_len} blocks and {utxos_len} UTXOs. This requires an instance method with access to the swarm to send a reply.");
             }
         }
     }
@@ -787,39 +798,25 @@ impl P2PServer {
             }
         };
 
-        let block_exists = {
-            let blocks_guard = dag_write_lock.blocks.read().await;
-            blocks_guard.contains_key(&block.id)
-        };
+        let block_exists = dag_write_lock.blocks.read().await.contains_key(&block.id);
 
         if block_exists {
             debug!("Block {} from {} already known.", block.id, source);
             return;
         }
 
-        if dag_write_lock
-            .is_valid_block(&block, &utxos)
-            .await
-            .unwrap_or(false)
-        {
-            let block_id_clone = block.id.clone();
-            if let Err(e) = dag_write_lock.add_block(block.clone(), &utxos).await {
-                warn!("Failed to add block (id: {block_id_clone}) from {source}: {e}");
-            } else {
-                info!(
-                    "Successfully processed and added block (id: {block_id_clone}) from {source}"
-                );
-                let mut proposals_lock = proposals.write().await;
-                if proposals_lock.len() >= MAX_PROPOSALS && !proposals_lock.is_empty() {
-                    proposals_lock.remove(0);
-                }
-                proposals_lock.push(block);
-            }
+        let block_id_clone = block.id.clone();
+        if let Err(e) = dag_write_lock.add_block(block.clone(), &utxos).await {
+            warn!("Failed to add block (id: {block_id_clone}) from {source}: {e}");
         } else {
-            warn!(
-                "Block from {} (id: {}) failed validation.",
-                source, block.id
+            info!(
+                "Successfully processed and added block (id: {block_id_clone}) from {source}"
             );
+            let mut proposals_lock = proposals.write().await;
+            if proposals_lock.len() >= MAX_PROPOSALS && !proposals_lock.is_empty() {
+                proposals_lock.remove(0);
+            }
+            proposals_lock.push(block);
         }
     }
 
@@ -843,7 +840,7 @@ impl P2PServer {
             return;
         }
 
-        let mempool_lock = mempool.read().await;
+        let mempool_lock = mempool.write().await;
         let utxos_read_guard = utxos.read().await;
         let dag_read_guard = dag.read().await;
 
@@ -881,36 +878,20 @@ impl P2PServer {
         };
 
         let mut added_blocks_count = 0;
-        let mut blocks_to_add_valid = Vec::new();
+        
+        let mut sorted_blocks: Vec<HyperBlock> = blocks_map.into_values().collect();
+        sorted_blocks.sort_by_key(|b| b.timestamp);
 
-        {
-            let existing_blocks_guard = dag_write_lock.blocks.read().await;
-            for (_id, block) in blocks_map.iter() {
-                if !existing_blocks_guard.contains_key(&block.id) {
-                    if dag_write_lock
-                        .is_valid_block(block, &utxos_arc)
-                        .await
-                        .unwrap_or(false)
-                    {
-                        blocks_to_add_valid.push(block.clone());
-                    } else {
-                        warn!(
-                            "Invalid block {} during state sync validation from {}",
-                            block.id, source
-                        );
-                    }
+        for block in sorted_blocks {
+            if !dag_write_lock.blocks.read().await.contains_key(&block.id) {
+                 if let Err(e) = dag_write_lock.add_block(block.clone(), &utxos_arc).await {
+                    warn!(
+                        "Failed to add block {} during state sync from {}: {}",
+                        block.id, source, e
+                    );
+                } else {
+                    added_blocks_count += 1;
                 }
-            }
-        }
-
-        for block in blocks_to_add_valid {
-            if let Err(e) = dag_write_lock.add_block(block.clone(), &utxos_arc).await {
-                warn!(
-                    "Failed to add block {} during state sync from {}: {}",
-                    block.id, source, e
-                );
-            } else {
-                added_blocks_count += 1;
             }
         }
         drop(dag_write_lock);
@@ -923,10 +904,11 @@ impl P2PServer {
                     return;
                 }
             };
-        utxos_write_lock.clear();
+        
         utxos_write_lock.extend(new_utxos_map.into_iter());
+
         info!(
-            "State sync: added {} blocks and fully updated UTXO set ({}) from peer: {}",
+            "State sync: added {} blocks and updated UTXO set (now size {}) from peer: {}",
             added_blocks_count,
             utxos_write_lock.len(),
             source

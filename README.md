@@ -44,6 +44,16 @@ A key innovation in Hyperchain is ΛΣ-ΩMEGA™ (Lambda Sigma Omega), Conscious
 
 This mechanism allows the node to reject potentially harmful actions at a fundamental level, providing a robust defense against sophisticated network attacks. It doesn't protect the system, it becomes the system.
 
+## **SAGA (Sentient Autonomous Governance Algorithm)** 🧠
+
+At the heart of HyperChain's intelligence is the **SAGA**, an AI-driven system responsible for on-chain reputation, dynamic economics, and autonomous governance. It functions as the network's cognitive layer, ensuring long-term health, security, and adaptability.
+
+* **Cognitive Analytics Engine**: SAGA continuously analyzes validator behavior by scoring blocks against a multi-faceted set of heuristics, including validity, network contribution, temporal consistency, and metadata integrity. It uses a placeholder machine learning model (currently a decision tree, designed to be replaced with a more advanced architecture like a neural network) to predict behavior and identify anomalies, such as fee spamming or sophisticated threat patterns.
+* **Saga Credit Score (SCS)**: Every network participant is assigned a dynamic **Saga Credit Score (SCS)**. This on-chain reputation metric is a weighted blend of the trust score from the Cognitive Engine, long-term contributions (Karma), and staked capital. A high SCS leads to increased block rewards and greater influence in governance, creating a powerful incentive for positive behavior.
+* **Saga Guidance System**: An integrated "Saga Assistant" provides on-demand help to users and developers via an API endpoint. It uses a Natural Language Understanding (NLU) pipeline to perform intent recognition and entity extraction, allowing it to provide contextual answers about topics like staking, tokenomics, or network state.
+* **Autonomous Governance**: SAGA can autonomously propose changes to network parameters. By observing metrics like transaction volume, proposal rejection rates, and validator count, it can generate governance proposals to adjust the base transaction fee during congestion, lower the vote threshold to encourage participation, or modify the minimum validator stake to improve decentralization. This transforms network governance from a purely manual process to a collaborative human-AI system.
+
+
 ## **Core Architectural Tenets**
 
 * **Heterogeneous Architecture**: Natively supports both DAG-based shards and linear PoW/PoS chains within one interoperable ecosystem.  

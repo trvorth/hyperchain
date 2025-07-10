@@ -1,100 +1,101 @@
 use hyperchain::hyperdag::{HyperBlock, HyperDAG, HomomorphicEncrypted, LatticeSignature};
 use hyperchain::saga::PalletSaga;
+// The TransactionMetadata struct is no longer used here.
 use hyperchain::transaction::{Transaction, Output, Input};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use futures::FutureExt;
+use ed25519_dalek::Signer;
+use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[tokio::main]
 async fn main() {
-    println!("--- [SAGA SIMULATION] ---");
+    tracing_subscriber::fmt::init();
+    println!("--- [SAGA BEHAVIORAL ANALYSIS SIMULATION] ---");
 
-    let mock_dag = Arc::new(RwLock::new(HyperDAG::new("mock_validator", 60, 10, 1, &[0;32]).await.unwrap()));
-    let saga_pallet = PalletSaga::new();
+    let saga_pallet = Arc::new(PalletSaga::new());
+    let mock_dag_arc = Arc::new(RwLock::new(
+        HyperDAG::new("mock_validator", 60, 10, 1, &[0;32], saga_pallet.clone())
+            .now_or_never()
+            .unwrap()
+            .unwrap(),
+    ));
+    mock_dag_arc.write().await.init_self_arc(mock_dag_arc.clone());
 
-    // --- Scenario 1: A good, honest node ---
+    println!("\n--- SCENARIO 1: HONEST MINER ---");
     let good_block = create_mock_block("good_miner", 20);
-    let good_score = saga_pallet.evaluate_block_with_saga(&good_block, &mock_dag).await.unwrap();
-    let good_reward = saga_pallet.calculate_dynamic_reward(&good_block).await.unwrap();
-    println!("[Honest Miner] SCS: {good_score:.2}, Dynamic Reward: {good_reward}");
+    saga_pallet.evaluate_block_with_saga(&good_block, &mock_dag_arc).await.unwrap();
+    let good_scs = saga_pallet.reputation.credit_scores.read().await.get("good_miner").cloned().unwrap();
+    println!("[Honest Miner] Final SCS: {:.4}", good_scs.score);
+    println!("[Honest Miner] Score Breakdown: {:#?}", good_scs.factors);
 
-    // --- Scenario 2: A node producing a block with a malformed coinbase tx ---
+    println!("\n--- SCENARIO 2: FAULTY MINER (INVALID COINBASE) ---");
     let mut bad_block = create_mock_block("bad_miner", 5);
-    bad_block.transactions[0].outputs.remove(1); // Remove dev fee output
-    let bad_score = saga_pallet.evaluate_block_with_saga(&bad_block, &mock_dag).await.unwrap();
-    let bad_reward = saga_pallet.calculate_dynamic_reward(&bad_block).await.unwrap();
-    println!("[Faulty Miner] SCS: {bad_score:.2}, Dynamic Reward: {bad_reward}");
+    bad_block.transactions[0].outputs.clear(); // Invalid coinbase
+    saga_pallet.evaluate_block_with_saga(&bad_block, &mock_dag_arc).await.unwrap();
+    let bad_scs = saga_pallet.reputation.credit_scores.read().await.get("bad_miner").cloned().unwrap();
+    println!("[Faulty Miner] Final SCS: {:.4}", bad_scs.score);
+    println!("[Faulty Miner] Score Breakdown: {:#?}", bad_scs.factors);
 
-    // --- Scenario 3: The faulty node tries again ---
-    let bad_block_2 = create_mock_block("bad_miner", 8);
-    let bad_score_2 = saga_pallet.evaluate_block_with_saga(&bad_block_2, &mock_dag).await.unwrap();
-    let bad_reward_2 = saga_pallet.calculate_dynamic_reward(&bad_block_2).await.unwrap();
-    println!("[Faulty Miner, 2nd attempt] SCS: {bad_score_2:.2}, Dynamic Reward: {bad_reward_2}");
+    println!("\n--- SCENARIO 3: FEE SPAMMER ---");
+    let spam_block = create_mock_block("spam_miner", 100); // High tx count
+    saga_pallet.evaluate_block_with_saga(&spam_block, &mock_dag_arc).await.unwrap();
+    let spam_scs = saga_pallet.reputation.credit_scores.read().await.get("spam_miner").cloned().unwrap();
+    println!("[Spam Miner] Final SCS: {:.4}", spam_scs.score);
+    println!("[Spam Miner] Score Breakdown: {:#?}", spam_scs.factors);
 }
 
-// Helper function to create mock blocks for the simulation
 fn create_mock_block(miner: &str, tx_count: usize) -> HyperBlock {
-    // Dummy data for cryptographic operations
-    let dummy_pub_key = [0u8; 32];
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&[1; 32]);
+    let dummy_pub_key = signing_key.verifying_key().to_bytes();
+    
+    // FIX: Construct metadata as a HashMap to match the Transaction struct.
+    let mut coinbase_metadata = HashMap::new();
+    coinbase_metadata.insert("origin_component".to_string(), "coinbase".to_string());
+    coinbase_metadata.insert("intent".to_string(), "Block Reward".to_string());
 
-    // Create a fully-formed, valid coinbase transaction
     let coinbase = Transaction {
-        id: "coinbase_tx".to_string(),
-        sender: "network".to_string(),
-        receiver: miner.to_string(),
-        public_key: vec![0; 32],
+        id: format!("coinbase_{miner}"),
+        sender: "network".to_string(), receiver: miner.to_string(),
+        public_key: dummy_pub_key.to_vec(),
         inputs: vec![],
         outputs: vec![
             Output { address: miner.to_string(), amount: 225, homomorphic_encrypted: HomomorphicEncrypted::new(225, &dummy_pub_key) },
-            Output { address: "dev_address".to_string(), amount: 25, homomorphic_encrypted: HomomorphicEncrypted::new(25, &dummy_pub_key) }
+            Output { address: "dev_fee_addr".to_string(), amount: 25, homomorphic_encrypted: HomomorphicEncrypted::new(25, &dummy_pub_key) }
         ],
-        amount: 250,
-        fee: 0,
-        timestamp: 0,
-        lattice_signature: vec![0; 64],
+        amount: 250, fee: 0, timestamp: 0,
+        lattice_signature: signing_key.sign(b"c").to_bytes().to_vec(),
+        metadata: coinbase_metadata,
     };
     let mut transactions = vec![coinbase];
 
-    // Create fully-formed, standard transactions
     for i in 0..tx_count {
+        let mut tx_metadata = HashMap::new();
+        tx_metadata.insert("origin_component".to_string(), "simulation-wallet".to_string());
+        tx_metadata.insert("intent".to_string(), "Mock Transfer".to_string());
+
         transactions.push(Transaction {
-            id: format!("tx_{i}"),
-            sender: "mock_sender".to_string(),
-            receiver: "mock_receiver".to_string(),
-            public_key: vec![0; 32],
-            inputs: vec![Input {
-                tx_id: "prev_tx".to_string(),
-                output_index: 0,
-            }],
-            outputs: vec![Output {
-                address: "mock_receiver".to_string(),
-                amount: 10,
-                homomorphic_encrypted: HomomorphicEncrypted::new(10, &dummy_pub_key),
-            }],
-            amount: 10,
-            fee: 1,
-            timestamp: i as u64,
-            lattice_signature: vec![0; 64],
+            id: format!("tx_{miner}_{i}"), sender: "sender".to_string(), receiver: "receiver".to_string(),
+            public_key: dummy_pub_key.to_vec(),
+            inputs: vec![Input { tx_id: "prev_tx".to_string(), output_index: 0 }],
+            outputs: vec![Output { address: "receiver".to_string(), amount: 10, homomorphic_encrypted: HomomorphicEncrypted::new(10, &dummy_pub_key) }],
+            amount: 10, fee: 1, timestamp: i as u64,
+            lattice_signature: signing_key.sign(b"tx").to_bytes().to_vec(),
+            metadata: tx_metadata,
         });
     }
-
-    // Initialize HyperBlock with all required fields as per the compiler errors
+    
     HyperBlock {
-        id: "mock_block_id".to_string(),
-        parents: vec!["parent1".to_string()],
-        miner: miner.to_string(),
-        timestamp: 123456789,
-        transactions,
-        difficulty: 1,
-        nonce: 0,
-        chain_id: 1,
-        effort: 0,
-        merkle_root: "mock_merkle_root".to_string(),
-        reward: 0,
-        validator: "mock_validator".to_string(),
-        cross_chain_references: vec![],
-        cross_chain_swaps: vec![],
-        smart_contracts: vec![],
-        lattice_signature: LatticeSignature::sign(&[0;32], b"mock_block_signature").unwrap(),
-        homomorphic_encrypted: vec![HomomorphicEncrypted::new(0, &dummy_pub_key)],
+        id: format!("block_{miner}"),
+        parents: vec!["genesis".to_string()], miner: miner.to_string(),
+        timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+        transactions: transactions.clone(),
+        difficulty: 1, nonce: 0, chain_id: 1, effort: 0,
+        merkle_root: HyperBlock::compute_merkle_root(&transactions).unwrap(),
+        reward: 250, validator: "validator".to_string(),
+        cross_chain_references: vec![], cross_chain_swaps: vec![], smart_contracts: vec![],
+        lattice_signature: LatticeSignature::sign(&[1;32], b"b").unwrap(),
+        homomorphic_encrypted: vec![],
     }
 }
