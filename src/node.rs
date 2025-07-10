@@ -4,7 +4,7 @@ use crate::mempool::Mempool;
 use crate::miner::{Miner, MinerConfig, MiningError};
 use crate::omega::reflect_on_action;
 use crate::p2p::{P2PCommand, P2PConfig, P2PError, P2PServer};
-use crate::saga::PalletSaga;
+use crate::saga::{PalletSaga, SagaError};
 use crate::transaction::Transaction;
 use crate::wallet::Wallet;
 use anyhow;
@@ -174,17 +174,23 @@ impl Node {
         let node_signing_key_bytes = signing_key_dalek.to_bytes().to_vec();
 
         info!("Initializing HyperDAG (loading database)...");
-        let dag = Arc::new(RwLock::new(
-            HyperDAG::new(
-                &initial_validator,
-                config.target_block_time,
-                config.difficulty,
-                config.num_chains,
-                &node_signing_key_bytes,
-            )
-            .await
-            .map_err(|e| NodeError::DAG(e.to_string()))?,
-        ));
+        let saga_pallet = Arc::new(PalletSaga::new());
+        
+        let dag_instance = HyperDAG::new(
+            &initial_validator,
+            config.target_block_time,
+            config.difficulty,
+            config.num_chains,
+            &node_signing_key_bytes,
+            saga_pallet.clone(),
+        )
+        .await
+        .map_err(|e| NodeError::DAG(e.to_string()))?;
+
+        let dag_arc = Arc::new(RwLock::new(dag_instance));
+
+        dag_arc.write().await.init_self_arc(dag_arc.clone());
+
         info!("HyperDAG initialized.");
 
         let mempool = Arc::new(RwLock::new(Mempool::new(3600, 10_000_000, 10_000)));
@@ -201,7 +207,7 @@ impl Node {
                     utxo_id.clone(),
                     UTXO {
                         address: initial_validator.clone(),
-                        amount: 100,
+                        amount: 100, // Genesis amount
                         tx_id: genesis_id_convention,
                         output_index: 0,
                         explorer_link: format!("https://hyperblockexplorer.org/utxo/{utxo_id}"),
@@ -212,7 +218,7 @@ impl Node {
 
         let miner_config = MinerConfig {
             address: wallet.address(),
-            dag: dag.clone(),
+            dag: dag_arc.clone(),
             difficulty_hex: format!("{:x}", config.difficulty),
             target_block_time: config.target_block_time,
             use_gpu: config.use_gpu,
@@ -223,13 +229,11 @@ impl Node {
         let miner_instance = Miner::new(miner_config)?;
         let miner = Arc::new(miner_instance);
 
-        let saga_pallet = Arc::new(PalletSaga::new());
-
         Ok(Self {
             _config_path: config_path,
             config: config.clone(),
             p2p_identity_keypair: local_keypair,
-            dag,
+            dag: dag_arc,
             miner,
             wallet,
             mempool,
@@ -327,7 +331,7 @@ impl Node {
             let proposals_clone_miner = self.proposals.clone();
             let wallet_clone_miner = self.wallet.clone();
             let mining_chain_id = self.mining_chain_id;
-            let saga_pallet_clone = self.saga_pallet.clone(); // Clone SAGA pallet for mining task
+            let saga_pallet_clone = self.saga_pallet.clone();
 
             async move {
                 loop {
@@ -336,102 +340,79 @@ impl Node {
                     mempool_clone_miner.write().await.prune_expired().await;
                     debug!("MINING_LOOP_STEP_1: Mempool pruned.");
 
-                    let (tips, transactions, signing_key_bytes) = {
-                        let dag_read = dag_clone_miner.read().await;
-                        let tips = dag_read.get_tips(mining_chain_id).await.unwrap_or_default();
+                    let candidate_block_result = dag_clone_miner.read().await.create_candidate_block(
+                        &wallet_clone_miner.get_signing_key()?.to_bytes(),
+                        &wallet_clone_miner.address(),
+                        &mempool_clone_miner,
+                        &utxos_clone_miner,
+                        mining_chain_id
+                    ).await;
 
-                        let mempool_read = mempool_clone_miner.read().await;
-                        let utxos_read = utxos_clone_miner.read().await;
-                        let transactions = mempool_read
-                            .select_transactions(
-                                &dag_read,
-                                &utxos_read,
-                                crate::hyperdag::MAX_TRANSACTIONS_PER_BLOCK,
-                            )
-                            .await;
-
-                        let signing_key = wallet_clone_miner.get_signing_key()?;
-                        (tips, transactions, signing_key.to_bytes())
+                    let mut candidate_block = match candidate_block_result {
+                        Ok(block) => block,
+                        Err(e) => {
+                            debug!("Could not create candidate block: {}. Retrying...", e);
+                            time::sleep(Duration::from_secs(2)).await;
+                            continue;
+                        }
                     };
-                    debug!(
-                        "MINING_LOOP_STEP_2: Data for mining gathered ({} tips, {} txs).",
-                        tips.len(),
-                        transactions.len()
-                    );
 
+                    debug!(
+                        "MINING_LOOP_STEP_2: Candidate block {} created with {} txs.",
+                        candidate_block.id,
+                        candidate_block.transactions.len()
+                    );
+                    
+                    // FIX: Correctly call the blocking `solve_pow` method.
+                    // The closure now returns the block on success, which is then used.
                     let mining_result = {
                         let miner_instance = miner_clone.clone();
                         tokio::task::spawn_blocking(move || {
-                            miner_instance.mine(
-                                mining_chain_id,
-                                tips,
-                                transactions,
-                                &signing_key_bytes,
-                            )
+                            match miner_instance.solve_pow(&mut candidate_block) {
+                                Ok(()) => Ok(candidate_block), // Return the modified block
+                                Err(e) => Err(e),
+                            }
                         })
                         .await?
                     };
 
-                    debug!("MINING_LOOP_STEP_3: Mining attempt finished.");
+                    debug!("MINING_LOOP_STEP_3: Mining (PoW) attempt finished.");
 
                     match mining_result {
-                        Ok(Some(mut block)) => {
-                            // SAGA INTEGRATION: Evaluate and apply dynamic reward
-                            // **FIX**: Pass the Arc directly, not a read guard, to fix the type mismatch error.
+                        Ok(solved_block) => {
+                            
                             if let Err(e) = saga_pallet_clone
-                                .evaluate_block_with_saga(&block, &dag_clone_miner)
+                                .evaluate_block_with_saga(&solved_block, &dag_clone_miner)
                                 .await
                             {
-                                warn!("SAGA evaluation for block {} failed: {}", block.id, e);
+                                warn!("SAGA evaluation for block {} failed: {}", solved_block.id, e);
                             }
 
-                            // Calculate the dynamic reward. This function doesn't need the DAG directly
-                            // as it relies on the now-updated credit scores within SAGA.
-                            match saga_pallet_clone.calculate_dynamic_reward(&block).await {
-                                Ok(dynamic_reward) => {
-                                    info!(
-                                        "SAGA dynamic reward for block {} is {}. Original reward was {}.",
-                                        block.id, dynamic_reward, block.reward
-                                    );
-                                    block.reward = dynamic_reward; // Overwrite reward with SAGA's calculation
-                                }
-                                Err(e) => {
-                                    error!(
-                                        "SAGA failed to calculate dynamic reward for block {}: {}. Using original miner reward.",
-                                        block.id, e
-                                    );
-                                    // If SAGA fails, we simply proceed with the reward already in the block from the miner.
-                                }
-                            }
-
-                            info!("{block}"); // Log the block *after* reward modification
+                            info!("{}", solved_block);
 
                             let mut proposals_guard = proposals_clone_miner.write().await;
                             if proposals_guard.len() >= MAX_PROPOSALS && !proposals_guard.is_empty()
                             {
                                 proposals_guard.remove(0);
                             }
-                            proposals_guard.push(block.clone());
+                            proposals_guard.push(solved_block.clone());
 
                             if peers_present {
                                 if let Err(e_send) =
-                                    mining_tx_channel.try_send(P2PCommand::BroadcastBlock(block))
+                                    mining_tx_channel.try_send(P2PCommand::BroadcastBlock(solved_block))
                                 {
-                                    debug!("Failed to send mined block to P2P channel (channel may be full): {e_send}");
+                                    error!("Failed to send mined block to P2P channel: {e_send}");
                                 }
                             } else {
                                 let mut dag_write_guard = dag_clone_miner.write().await;
                                 if let Err(e) =
-                                    dag_write_guard.add_block(block, &utxos_clone_miner).await
+                                    dag_write_guard.add_block(solved_block, &utxos_clone_miner).await
                                 {
                                     warn!(
                                         "Failed to add self-mined block in single-node mode: {e}"
                                     );
                                 }
                             }
-                        }
-                        Ok(None) => {
-                            info!("Mining attempt concluded without finding a block. Retrying...")
                         }
                         Err(e) => error!("An error occurred during mining: {e:?}"),
                     }
@@ -447,6 +428,7 @@ impl Node {
                 mempool: self.mempool.clone(),
                 utxos: self.utxos.clone(),
                 api_address: self.config.api_address.clone(),
+                p2p_command_sender: tx_p2p_commands.clone(),
             };
             async move {
                 let rate_limiter_info: Arc<DirectApiRateLimiter> =
@@ -466,6 +448,8 @@ impl Node {
                     .route("/health", get(health_check))
                     .route("/mempool", get(mempool_handler))
                     .route("/publish-readiness", get(publish_readiness_handler))
+                    // EVOLVED: Added an endpoint to interact with the SAGA Guidance System.
+                    .route("/saga/ask", post(ask_saga))
                     .layer(middleware::from_fn_with_state(
                         rate_limiter_info.clone(),
                         |s, r, n| rate_limit_layer(s, r, n, "/info"),
@@ -541,8 +525,6 @@ impl Node {
     }
 }
 
-// --- The rest of the file (API handlers and tests) is unchanged ---
-
 async fn rate_limit_layer(
     MiddlewareState(limiter): MiddlewareState<Arc<DirectApiRateLimiter>>,
     req: HttpRequest<Body>,
@@ -567,7 +549,43 @@ struct AppState {
     mempool: Arc<RwLock<Mempool>>,
     utxos: Arc<RwLock<HashMap<String, UTXO>>>,
     api_address: String,
+    p2p_command_sender: mpsc::Sender<P2PCommand>,
 }
+
+#[derive(Deserialize)]
+struct SagaQuery {
+    query: String,
+}
+
+/// API endpoint to interact with the SAGA Guidance System.
+async fn ask_saga(
+    State(state): State<AppState>,
+    Json(payload): Json<SagaQuery>,
+) -> Result<Json<String>, StatusCode> {
+    let dag_read = state.dag.read().await;
+    let saga = &dag_read.saga;
+    
+    // Provide SAGA with the current context for a more informed response.
+    let network_state = *saga.economy.network_state.read().await;
+    let threat_level = crate::omega::get_threat_level().await;
+    let proactive_insight = saga.economy.proactive_insights.read().await.first().cloned();
+
+    match saga.guidance_system.get_guidance_response(
+        &payload.query,
+        network_state,
+        threat_level,
+        proactive_insight.as_ref(),
+    ).await {
+        Ok(response) => Ok(Json(response)),
+        // FIX: Correctly pattern match the tuple variant.
+        Err(SagaError::AmbiguousQuery(_)) => Err(StatusCode::BAD_REQUEST),
+        Err(e) => {
+            warn!("SAGA guidance query failed: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
 
 async fn info_handler(
     State(state): State<AppState>,
@@ -625,7 +643,7 @@ async fn publish_readiness_handler(
         is_ready,
         block_count: blocks_read_guard.len(),
         utxo_count: utxos_read_guard.len(),
-        peer_count: 0,
+        peer_count: 0, // This would need access to P2P state to be accurate
         mempool_size: mempool_read_guard.size().await,
         issues,
     }))
@@ -706,38 +724,22 @@ async fn submit_transaction(
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    let mempool_write_guard = state.mempool.write().await;
     let utxos_read_guard = state.utxos.read().await;
     let dag_read_guard = state.dag.read().await;
 
-    if tx_data
-        .verify(&dag_read_guard, &utxos_read_guard)
-        .await
-        .is_err()
-    {
-        warn!(
-            "Transaction {} failed full verification via API",
-            tx_data.id
-        );
+    if let Err(e) = tx_data.verify(&dag_read_guard, &utxos_read_guard).await {
+        warn!("Transaction {} failed verification via API: {}", tx_data.id, e);
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    match mempool_write_guard
-        .add_transaction(tx_data.clone(), &utxos_read_guard, &dag_read_guard)
-        .await
-    {
-        Ok(_) => {
-            info!("Transaction {} added to mempool via API", tx_data.id);
-            Ok(Json(tx_data.id.clone()))
-        }
-        Err(mempool_err) => {
-            warn!(
-                "Failed to add transaction {} to mempool: {}",
-                tx_data.id, mempool_err
-            );
-            Err(StatusCode::BAD_REQUEST)
-        }
+    let tx_id = tx_data.id.clone();
+    if let Err(e) = state.p2p_command_sender.send(P2PCommand::BroadcastTransaction(tx_data)).await {
+        error!("Failed to broadcast transaction {} to P2P task: {}", tx_id, e);
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
+
+    info!("Transaction {} submitted to mempool and broadcasted via API", tx_id);
+    Ok(Json(tx_id))
 }
 
 async fn get_block(
@@ -787,12 +789,13 @@ mod tests {
     use rand::Rng;
     use serial_test::serial;
     use std::fs as std_fs;
-
+    
     #[tokio::test]
     #[serial]
     async fn test_node_creation_and_config_save() {
-        if std::path::Path::new("hyperdag_db_test_node_creation").exists() {
-            std::fs::remove_dir_all("hyperdag_db_test_node_creation").unwrap();
+        let db_path = "hyperdag_db_test_node_creation";
+        if std::path::Path::new(db_path).exists() {
+            std::fs::remove_dir_all(db_path).unwrap();
         }
 
         let _ = tracing_subscriber::fmt::try_init();
@@ -838,6 +841,11 @@ mod tests {
             temp_peer_cache_path.clone(),
         )
         .await;
+        
+        if std::path::Path::new(db_path).exists() {
+            std::fs::remove_dir_all(db_path).unwrap();
+        }
+
 
         assert!(
             node_instance_result.is_ok(),

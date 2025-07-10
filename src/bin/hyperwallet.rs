@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
-// FIX: UTXO is part of the `hyperdag` module, not `transaction`. Import it directly.
 use hyperchain::{
+    // NOTE: TransactionMetadata struct is no longer directly used here.
     hyperdag::UTXO,
     transaction::{Input, Output, Transaction, TransactionConfig},
     wallet::{Wallet, WalletError},
@@ -264,6 +264,12 @@ async fn send_transaction(
 
     // 4. Create and sign the transaction
     let signing_key = wallet.get_signing_key()?;
+    
+    // FIX: Construct metadata as a HashMap to match the expected type in TransactionConfig.
+    let mut metadata_map = HashMap::new();
+    metadata_map.insert("origin_component".to_string(), "hyperwallet-cli".to_string());
+    metadata_map.insert("intent".to_string(), "Standard P2P Transfer".to_string());
+
     let tx_config = TransactionConfig {
         sender: sender_address,
         receiver: to,
@@ -272,7 +278,9 @@ async fn send_transaction(
         inputs,
         outputs,
         signing_key_bytes: signing_key.as_bytes(),
-        tx_timestamps: Arc::new(RwLock::new(HashMap::new())), // For standalone creation
+        tx_timestamps: Arc::new(RwLock::new(HashMap::new())),
+        // Pass the correctly typed HashMap wrapped in Some().
+        metadata: Some(metadata_map),
     };
 
     let tx = Transaction::new(tx_config)

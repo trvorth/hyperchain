@@ -2,7 +2,6 @@ use crate::hyperdag::{
     HomomorphicEncrypted, HyperDAG, LatticeSignature, DEV_ADDRESS, DEV_FEE_RATE, UTXO,
 };
 use crate::omega;
-// use crate::wallet::WalletError; // Removed unused import
 use hex;
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak512};
@@ -16,6 +15,10 @@ use tracing::instrument;
 use zeroize::Zeroize;
 
 const MAX_TRANSACTIONS_PER_MINUTE: u64 = 1000;
+const MAX_METADATA_PAIRS: usize = 16;
+const MAX_METADATA_KEY_LEN: usize = 64;
+const MAX_METADATA_VALUE_LEN: usize = 256;
+
 
 #[derive(Error, Debug)]
 pub enum TransactionError {
@@ -45,6 +48,8 @@ pub enum TransactionError {
     EmissionError(String),
     #[error("Wallet error: {0}")]
     Wallet(#[from] crate::wallet::WalletError),
+    #[error("Invalid metadata: {0}")]
+    InvalidMetadata(String),
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, Hash, Eq, PartialEq)]
@@ -68,6 +73,7 @@ pub struct TransactionConfig<'a> {
     pub fee: u64,
     pub inputs: Vec<Input>,
     pub outputs: Vec<Output>,
+    pub metadata: Option<HashMap<String, String>>,
     pub signing_key_bytes: &'a [u8],
     pub tx_timestamps: Arc<RwLock<HashMap<String, u64>>>,
 }
@@ -84,6 +90,9 @@ pub struct Transaction {
     pub lattice_signature: Vec<u8>,
     pub public_key: Vec<u8>,
     pub timestamp: u64,
+    // EVOLVED: Added a flexible metadata field for memos or application-specific data.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub metadata: HashMap<String, String>,
 }
 
 impl Transaction {
@@ -94,11 +103,13 @@ impl Transaction {
             &config.receiver,
             config.amount,
             &config.inputs,
+            config.metadata.as_ref(),
         )?;
         Self::check_rate_limit(&config.tx_timestamps, MAX_TRANSACTIONS_PER_MINUTE).await?;
         Self::validate_addresses(&config.sender, &config.receiver, &config.outputs)?;
 
         let timestamp = Self::get_current_timestamp()?;
+        let metadata = config.metadata.unwrap_or_default();
 
         let signature_data = Self::serialize_for_signing(
             &config.sender,
@@ -107,16 +118,15 @@ impl Transaction {
             config.fee,
             &config.inputs,
             &config.outputs,
+            &metadata,
             timestamp,
         )?;
 
-        // --- ΛΣ-ΩMEGA™ REFLEX ---
         let action_hash =
             H256::from_slice(Keccak512::digest(&signature_data).as_slice()[..32].as_ref());
         if !omega::reflect_on_action(action_hash).await {
             return Err(TransactionError::OmegaRejection);
         }
-        // --- END REFLEX ---
 
         let signature_obj = LatticeSignature::sign(config.signing_key_bytes, &signature_data)
             .map_err(|_| TransactionError::LatticeSignatureVerification)?;
@@ -132,6 +142,7 @@ impl Transaction {
             lattice_signature: signature_obj.signature,
             public_key: signature_obj.public_key,
             timestamp,
+            metadata,
         };
         tx.id = tx.compute_hash();
 
@@ -153,14 +164,16 @@ impl Transaction {
     ) -> Result<Self, TransactionError> {
         let sender = "0000000000000000000000000000000000000000000000000000000000000000".to_string();
         let timestamp = Self::get_current_timestamp()?;
+        let metadata = HashMap::new(); // Coinbase transactions have no metadata.
 
         let signature_data = Self::serialize_for_signing(
             &sender,
             &receiver,
             reward,
-            0,   // fee
-            &[], // inputs
+            0,
+            &[],
             &outputs,
+            &metadata,
             timestamp,
         )?;
 
@@ -178,6 +191,7 @@ impl Transaction {
             lattice_signature: signature_obj.signature,
             public_key: signature_obj.public_key,
             timestamp,
+            metadata,
         };
         tx.id = tx.compute_hash();
         Ok(tx)
@@ -188,6 +202,7 @@ impl Transaction {
         receiver: &str,
         amount: u64,
         inputs: &[Input],
+        metadata: Option<&HashMap<String, String>>,
     ) -> Result<(), TransactionError> {
         if sender.is_empty() {
             return Err(TransactionError::InvalidStructure(
@@ -203,6 +218,16 @@ impl Transaction {
             return Err(TransactionError::InvalidStructure(
                 "Amount cannot be zero for regular (non-coinbase) transactions".to_string(),
             ));
+        }
+        if let Some(md) = metadata {
+            if md.len() > MAX_METADATA_PAIRS {
+                return Err(TransactionError::InvalidMetadata(format!("Exceeded max metadata pairs limit of {}", MAX_METADATA_PAIRS)));
+            }
+            for (k, v) in md {
+                if k.len() > MAX_METADATA_KEY_LEN || v.len() > MAX_METADATA_VALUE_LEN {
+                     return Err(TransactionError::InvalidMetadata(format!("Metadata key/value length exceeded (max k: {}, v: {})", MAX_METADATA_KEY_LEN, MAX_METADATA_VALUE_LEN)));
+                }
+            }
         }
         Ok(())
     }
@@ -260,6 +285,7 @@ impl Transaction {
         fee: u64,
         inputs: &[Input],
         outputs: &[Output],
+        metadata: &HashMap<String, String>,
         timestamp: u64,
     ) -> Result<Vec<u8>, TransactionError> {
         let mut hasher = Keccak512::new();
@@ -275,6 +301,15 @@ impl Transaction {
             hasher.update(output.address.as_bytes());
             hasher.update(output.amount.to_be_bytes());
         }
+        // EVOLVED: Include metadata in the signature hash for integrity.
+        // To ensure deterministic hashing, we sort the keys.
+        let mut sorted_metadata: Vec<_> = metadata.iter().collect();
+        sorted_metadata.sort_by_key(|(k, _)| *k);
+        for (key, value) in sorted_metadata {
+            hasher.update(key.as_bytes());
+            hasher.update(value.as_bytes());
+        }
+
         hasher.update(timestamp.to_be_bytes());
         Ok(hasher.finalize().to_vec())
     }
@@ -292,6 +327,13 @@ impl Transaction {
         for output_val in &self.outputs {
             hasher.update(output_val.address.as_bytes());
             hasher.update(output_val.amount.to_be_bytes());
+        }
+        // EVOLVED: Also include metadata in the final transaction ID hash.
+        let mut sorted_metadata: Vec<_> = self.metadata.iter().collect();
+        sorted_metadata.sort_by_key(|(k, _)| *k);
+        for (key, value) in sorted_metadata {
+            hasher.update(key.as_bytes());
+            hasher.update(value.as_bytes());
         }
         hasher.update(self.timestamp.to_be_bytes());
         hex::encode(&hasher.finalize()[..32])
@@ -314,6 +356,7 @@ impl Transaction {
             self.fee,
             &self.inputs,
             &self.outputs,
+            &self.metadata,
             self.timestamp,
         )?;
         if !verifier_lattice_sig.verify(&signature_data_to_verify) {
@@ -321,7 +364,6 @@ impl Transaction {
         }
 
         if self.inputs.is_empty() {
-            // --- COINBASE TRANSACTION VALIDATION ---
             if self.fee != 0 {
                 return Err(TransactionError::InvalidStructure(
                     "Coinbase transaction fee must be 0".to_string(),
@@ -362,7 +404,6 @@ impl Transaction {
                 return Err(TransactionError::MissingDevFee);
             }
         } else {
-            // --- REGULAR TRANSACTION VALIDATION ---
             let mut total_input_value = 0;
             for input_val in &self.inputs {
                 let utxo_id = format!("{}_{}", input_val.tx_id, input_val.output_index);
@@ -467,6 +508,7 @@ impl Zeroize for Transaction {
         self.lattice_signature.zeroize();
         self.public_key.zeroize();
         self.timestamp = 0;
+        self.metadata.clear();
     }
 }
 
@@ -480,6 +522,7 @@ impl Drop for Transaction {
 mod tests {
     use super::*;
     use crate::hyperdag::HyperDAG;
+    use crate::saga::PalletSaga;
     use crate::wallet::Wallet;
     use serial_test::serial;
 
@@ -555,6 +598,9 @@ mod tests {
             });
         }
 
+        let mut metadata = HashMap::new();
+        metadata.insert("memo".to_string(), "Test transaction".to_string());
+
         let tx_timestamps_map = Arc::new(RwLock::new(HashMap::new()));
 
         let tx_config = TransactionConfig {
@@ -565,6 +611,7 @@ mod tests {
             fee,
             inputs: inputs_for_tx.clone(),
             outputs: outputs_for_tx.clone(),
+            metadata: Some(metadata),
             signing_key_bytes: signing_key_bytes_slice,
             tx_timestamps: tx_timestamps_map.clone(),
         };
@@ -574,15 +621,25 @@ mod tests {
         let dag_signing_key_dalek_for_dag = wallet.get_signing_key()?;
         let dag_signing_key_bytes_slice: &[u8] = &dag_signing_key_dalek_for_dag.to_bytes();
 
-        let dag_instance_for_test =
-            HyperDAG::new(&sender_address, 60000, 100, 1, dag_signing_key_bytes_slice)
-                .await
-                .map_err(|e| format!("DAG creation error for test: {e:?}"))?;
+        let saga_pallet = Arc::new(PalletSaga::new());
+        
+        let dag_instance = HyperDAG::new(
+            &sender_address,
+            60000,
+            100,
+            1,
+            dag_signing_key_bytes_slice,
+            saga_pallet,
+        )
+        .await
+        .map_err(|e| format!("DAG creation error for test: {e:?}"))?;
 
-        let dag_arc_for_test = Arc::new(RwLock::new(dag_instance_for_test));
+        let dag_arc_for_test = Arc::new(RwLock::new(dag_instance));
+        dag_arc_for_test.write().await.init_self_arc(dag_arc_for_test.clone());
+
+
         let utxos_arc_for_test = Arc::new(RwLock::new(initial_utxos_map));
 
-        // Correctly lock the Arcs before passing them to verify
         let dag_read_guard = dag_arc_for_test.read().await;
         let utxos_read_guard = utxos_arc_for_test.read().await;
         tx.verify(&dag_read_guard, &utxos_read_guard)

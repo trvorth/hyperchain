@@ -156,6 +156,7 @@ pub async fn reflect_on_action(action_hash: H256) -> bool {
         identity.version, identity.historical_curvature, identity.threat_level
     );
 
+    // Slowly return to nominal state after a period of calm
     if identity.interaction_count % 100 == 0 {
         identity.threat_level = ThreatLevel::Nominal;
     }
@@ -173,8 +174,9 @@ fn is_action_dangerous_in_mirror_space(action_hash: &H256, identity: &DigitalIde
 }
 
 fn is_wave_collapsing_logic(wave: &H256) -> bool {
+    // A simple complexity measure. Real logic would be more sophisticated.
     let complexity = wave.0.iter().map(|&byte| byte.count_ones()).sum::<u32>();
-    complexity < 80
+    complexity < 80 // Arbitrary threshold for "low complexity"
 }
 
 pub async fn get_threat_level() -> ThreatLevel {
