@@ -3,6 +3,8 @@
 use crate::hyperdag::{HyperBlock, HyperDAG, LatticeSignature, UTXO};
 use crate::mempool::Mempool;
 use crate::node::PeerCache;
+// EVOLVED: Import the new CarbonOffsetCredential for network transport.
+use crate::saga::CarbonOffsetCredential;
 use crate::transaction::Transaction;
 use futures::stream::StreamExt;
 use governor::{clock::DefaultClock, state::keyed::DashMapStateStore, Quota, RateLimiter};
@@ -135,6 +137,8 @@ pub enum NetworkMessageData {
     Transaction(Transaction),
     State(HashMap<String, HyperBlock>, HashMap<String, UTXO>),
     StateRequest,
+    // EVOLVED: Add new message type for PoCO.
+    CarbonOffsetCredential(CarbonOffsetCredential),
 }
 
 impl NetworkMessage {
@@ -177,6 +181,8 @@ pub enum P2PCommand {
     BroadcastTransaction(Transaction),
     RequestState,
     BroadcastState(HashMap<String, HyperBlock>, HashMap<String, UTXO>),
+    // EVOLVED: Add new command for PoCO.
+    BroadcastCarbonCredential(CarbonOffsetCredential),
 }
 
 type KeyedPeerRateLimiter = RateLimiter<PeerId, DashMapStateStore<PeerId>, DefaultClock>;
@@ -200,6 +206,8 @@ pub struct GossipMessageContext {
     pub rate_limiter_block: Arc<KeyedPeerRateLimiter>,
     pub rate_limiter_tx: Arc<KeyedPeerRateLimiter>,
     pub rate_limiter_state: Arc<KeyedPeerRateLimiter>,
+    // EVOLVED: Add a rate limiter for the new credential topic.
+    pub rate_limiter_credential: Arc<KeyedPeerRateLimiter>,
     pub dag: Arc<RwLock<HyperDAG>>,
     pub mempool: Arc<RwLock<Mempool>>,
     pub utxos: Arc<RwLock<HashMap<String, UTXO>>>,
@@ -217,6 +225,8 @@ pub struct P2PServer {
     rate_limiter_block: Arc<KeyedPeerRateLimiter>,
     rate_limiter_tx: Arc<KeyedPeerRateLimiter>,
     rate_limiter_state: Arc<KeyedPeerRateLimiter>,
+    // EVOLVED: Add a rate limiter for the new credential topic.
+    rate_limiter_credential: Arc<KeyedPeerRateLimiter>,
     blacklist: Arc<RwLock<HashSet<PeerId>>>,
     node_lattice_signing_key_bytes: Vec<u8>,
     known_peers: Arc<RwLock<HashSet<PeerId>>>,
@@ -298,6 +308,8 @@ impl P2PServer {
         let quota_block = Quota::per_second(nonzero!(10u32));
         let quota_tx = Quota::per_second(nonzero!(50u32));
         let quota_state = Quota::per_second(nonzero!(5u32));
+        // EVOLVED: Add a quota for the new credential topic.
+        let quota_credential = Quota::per_second(nonzero!(20u32));
 
         Ok(Self {
             swarm,
@@ -309,6 +321,7 @@ impl P2PServer {
             rate_limiter_block: Arc::new(RateLimiter::keyed(quota_block)),
             rate_limiter_tx: Arc::new(RateLimiter::keyed(quota_tx)),
             rate_limiter_state: Arc::new(RateLimiter::keyed(quota_state)),
+            rate_limiter_credential: Arc::new(RateLimiter::keyed(quota_credential)),
             blacklist: Arc::new(RwLock::new(HashSet::new())),
             node_lattice_signing_key_bytes: config.node_signing_key_material.to_vec(),
             known_peers: Arc::new(RwLock::new(HashSet::new())),
@@ -357,10 +370,12 @@ impl P2PServer {
         topic_prefix: &str,
         gossipsub: &mut gossipsub::Behaviour,
     ) -> Result<Vec<IdentTopic>, P2PError> {
+        // EVOLVED: Add a new topic for carbon credentials.
         let topics_str = [
             format!("/hyperchain/{topic_prefix}/blocks"),
             format!("/hyperchain/{topic_prefix}/transactions"),
             format!("/hyperchain/{topic_prefix}/state_updates"),
+            format!("/hyperchain/{topic_prefix}/carbon_credentials"),
         ];
         let mut topics = Vec::new();
         for topic_s in topics_str.iter() {
@@ -443,10 +458,6 @@ impl P2PServer {
         }
     }
 
-    // FIX: Correct the signature of `handle_swarm_event` for libp2p-swarm v0.46.0.
-    // The `SwarmEvent` enum in this version only takes one generic argument for the
-    // behaviour event. The connection error is now handled in specific variants
-    // like `ConnectionClosed` and `OutgoingConnectionError`.
     async fn handle_swarm_event(&mut self, event: SwarmEvent<NodeBehaviourEvent>) {
         match event {
             SwarmEvent::NewListenAddr { address, .. } => {
@@ -498,6 +509,7 @@ impl P2PServer {
                         rate_limiter_block: self.rate_limiter_block.clone(),
                         rate_limiter_tx: self.rate_limiter_tx.clone(),
                         rate_limiter_state: self.rate_limiter_state.clone(),
+                        rate_limiter_credential: self.rate_limiter_credential.clone(),
                         dag: self.dag.clone(),
                         mempool: self.mempool.clone(),
                         utxos: self.utxos.clone(),
@@ -606,13 +618,15 @@ impl P2PServer {
                     let mempool_guard = self.mempool.read().await;
                     let utxos_guard = self.utxos.read().await;
                     let dag_guard = self.dag.read().await;
-                    mempool_guard.add_transaction(tx.clone(), &utxos_guard, &dag_guard).await
+                    mempool_guard
+                        .add_transaction(tx.clone(), &utxos_guard, &dag_guard)
+                        .await
                 };
 
                 if let Err(e) = add_result {
-                     warn!("Failed to add locally submitted transaction {} to mempool before broadcasting: {}", tx.id, e);
+                    warn!("Failed to add locally submitted transaction {} to mempool before broadcasting: {}", tx.id, e);
                 } else {
-                     self.broadcast_message(
+                    self.broadcast_message(
                         NetworkMessageData::Transaction(tx.clone()),
                         1, // Topic index for transactions
                         &format!("transaction {}", tx.id),
@@ -633,6 +647,15 @@ impl P2PServer {
                 )
                 .await
             }
+            // EVOLVED: Handle broadcasting the new credential type.
+            P2PCommand::BroadcastCarbonCredential(cred) => {
+                self.broadcast_message(
+                    NetworkMessageData::CarbonOffsetCredential(cred.clone()),
+                    3, // Topic index for credentials
+                    &format!("carbon credential {}", cred.id),
+                )
+                .await
+            }
         }
     }
 
@@ -647,14 +670,19 @@ impl P2PServer {
         }
 
         let topic_str = message.topic.as_str();
+        // EVOLVED: Add the new credential topic to the rate-limiting logic.
         let (rate_limiter_to_use, message_type_str) = if topic_str.contains("blocks") {
             (context.rate_limiter_block, "block")
         } else if topic_str.contains("transactions") {
             (context.rate_limiter_tx, "transaction")
         } else if topic_str.contains("state_updates") {
             (context.rate_limiter_state, "state_update")
+        } else if topic_str.contains("carbon_credentials") {
+            (context.rate_limiter_credential, "carbon_credential")
         } else {
-            warn!("Message on unknown topic '{topic_str}', applying default (block) rate limiter");
+            warn!(
+                "Message on unknown topic '{topic_str}', applying default (block) rate limiter"
+            );
             (context.rate_limiter_block, "unknown_topic_block")
         };
 
@@ -767,6 +795,21 @@ impl P2PServer {
                     error!("Failed to send BroadcastState command: {e}");
                 }
             }
+            // EVOLVED: Add processing logic for the new credential message type.
+            NetworkMessageData::CarbonOffsetCredential(cred) => {
+                info!(
+                    "Received CarbonOffsetCredential {} from peer {}",
+                    cred.id, source
+                );
+                let dag = context.dag.read().await;
+                // In a real implementation, we would add this to a separate pool
+                // for SAGA to process during block evaluation.
+                if let Err(e) = dag.saga.verify_and_store_credential(cred).await {
+                    warn!(
+                        "Invalid CarbonOffsetCredential received from {source}: {e}"
+                    );
+                }
+            }
         }
     }
 
@@ -807,7 +850,9 @@ impl P2PServer {
 
         let block_id_clone = block.id.clone();
         if let Err(e) = dag_write_lock.add_block(block.clone(), &utxos).await {
-            warn!("Failed to add block (id: {block_id_clone}) from {source}: {e}");
+            warn!(
+                "Failed to add block (id: {block_id_clone}) from {source}: {e}"
+            );
         } else {
             info!(
                 "Successfully processed and added block (id: {block_id_clone}) from {source}"
@@ -878,13 +923,13 @@ impl P2PServer {
         };
 
         let mut added_blocks_count = 0;
-        
+
         let mut sorted_blocks: Vec<HyperBlock> = blocks_map.into_values().collect();
         sorted_blocks.sort_by_key(|b| b.timestamp);
 
         for block in sorted_blocks {
             if !dag_write_lock.blocks.read().await.contains_key(&block.id) {
-                 if let Err(e) = dag_write_lock.add_block(block.clone(), &utxos_arc).await {
+                if let Err(e) = dag_write_lock.add_block(block.clone(), &utxos_arc).await {
                     warn!(
                         "Failed to add block {} during state sync from {}: {}",
                         block.id, source, e
@@ -904,7 +949,7 @@ impl P2PServer {
                     return;
                 }
             };
-        
+
         utxos_write_lock.extend(new_utxos_map.into_iter());
 
         info!(

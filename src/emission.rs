@@ -1,5 +1,3 @@
-// src/emission.rs
-
 use log::debug;
 use prometheus::{register_int_counter, IntCounter};
 use serde::{Deserialize, Serialize};
@@ -7,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::instrument;
 
 // Made constants public
-pub const INITIAL_REWARD: u64 = 500; // Initial block reward
+pub const INITIAL_REWARD: u64 = 250; // Initial block reward
 pub const TOTAL_SUPPLY: u64 = 10_000_000_000_000_000; // Total supply cap set to 10 Billion
 pub const HALVING_PERIOD: u64 = 7_884_000; // 3 months in seconds
 pub const HALVING_FACTOR: f64 = 0.97; // 3% reduction per halving
@@ -87,7 +85,6 @@ impl Emission {
         let reward = reward.round() as u64;
         let per_chain_reward = reward.checked_div(self.num_chains as u64).unwrap_or(1).max(1);
 
-
         if elapsed_periods > self.last_halving_period {
             HALVING_EVENTS.inc();
             debug!("Halving event: period {elapsed_periods}, current reward per chain: {per_chain_reward}");
@@ -132,8 +129,6 @@ impl Emission {
         let elapsed_time = timestamp.saturating_sub(self.genesis_timestamp);
         let current_calculated_period = elapsed_time / self.halving_period;
         if current_calculated_period > self.last_halving_period {
-            // HALVING_EVENTS.inc(); // Incrementing here could be redundant if also done in calculate_reward
-            // This method is for explicitly updating the state if needed.
             debug!(
                 "Emission state: Last halving period updated from {} to {}",
                 self.last_halving_period, current_calculated_period

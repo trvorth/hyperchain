@@ -1,5 +1,6 @@
+// src/node.rs
 use crate::config::{Config, ConfigError};
-use crate::hyperdag::{HyperBlock, HyperDAG, UTXO};
+use crate::hyperdag::{HyperBlock, HyperDAG, HyperDAGError, UTXO};
 use crate::mempool::Mempool;
 use crate::miner::{Miner, MinerConfig, MiningError};
 use crate::omega::reflect_on_action;
@@ -34,7 +35,7 @@ use thiserror::Error;
 use tokio::fs;
 use tokio::signal;
 use tokio::sync::{mpsc, RwLock};
-use tokio::task::{JoinError, JoinSet};
+use tokio::task::{self, JoinError, JoinSet};
 use tokio::time::{self, timeout};
 use tracing::{debug, error, info, instrument, warn};
 
@@ -70,6 +71,8 @@ pub enum NodeError {
     P2PIdentity(String),
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("HyperDAG error: {0}")]
+    HyperDAG(#[from] HyperDAGError),
 }
 
 #[derive(Serialize, Debug)]
@@ -175,7 +178,7 @@ impl Node {
 
         info!("Initializing HyperDAG (loading database)...");
         let saga_pallet = Arc::new(PalletSaga::new());
-        
+
         let dag_instance = HyperDAG::new(
             &initial_validator,
             config.target_block_time,
@@ -192,6 +195,9 @@ impl Node {
         dag_arc.write().await.init_self_arc(dag_arc.clone());
 
         info!("HyperDAG initialized.");
+
+        task::yield_now().await;
+        time::sleep(Duration::from_secs(1)).await;
 
         let mempool = Arc::new(RwLock::new(Mempool::new(3600, 10_000_000, 10_000)));
         let utxos = Arc::new(RwLock::new(HashMap::with_capacity(MAX_UTXOS)));
@@ -250,7 +256,8 @@ impl Node {
     }
 
     pub async fn start(&self) -> Result<(), NodeError> {
-        let (tx_p2p_commands, rx_p2p_commands) = mpsc::channel::<P2PCommand>(100);
+        // FIX: The receiver is now mutable so it can be moved into the appropriate task.
+        let (tx_p2p_commands, mut rx_p2p_commands) = mpsc::channel::<P2PCommand>(100);
         let mut join_set: JoinSet<Result<(), NodeError>> = JoinSet::new();
 
         if !self.config.peers.is_empty() {
@@ -318,7 +325,47 @@ impl Node {
             };
             join_set.spawn(p2p_task_fut);
         } else {
-            info!("No peers found in config, skipping P2P server initialization. Running in single-node mode.");
+            // *** FIX FOR HANGING ISSUE ***
+            // In single-node mode, we now spawn a dedicated local command processor.
+            // This task drains the command channel, decoupling the mining loop from
+            // directly writing to the DAG and preventing deadlocks.
+            info!("No peers found. Spawning local command processor task for single-node mode.");
+            let local_dag = self.dag.clone();
+            let local_mempool = self.mempool.clone();
+            let local_utxos = self.utxos.clone();
+
+            let local_processor_task = async move {
+                while let Some(command) = rx_p2p_commands.recv().await {
+                    match command {
+                        P2PCommand::BroadcastBlock(block) => {
+                            debug!("Local processor received block {}", block.id);
+                            let mut dag_writer = local_dag.write().await;
+                            if let Err(e) = dag_writer.add_block(block, &local_utxos).await {
+                                warn!("Local processor failed to add block: {}", e);
+                            }
+                        }
+                        P2PCommand::BroadcastTransaction(tx) => {
+                            debug!("Local processor received transaction {}", tx.id);
+                            let mempool_writer = local_mempool.write().await;
+                            let dag_reader = local_dag.read().await;
+                            let utxos_reader = local_utxos.read().await;
+                            if let Err(e) = mempool_writer
+                                .add_transaction(tx, &utxos_reader, &dag_reader)
+                                .await
+                            {
+                                warn!(
+                                    "Local processor failed to add transaction to mempool: {}",
+                                    e
+                                );
+                            }
+                        }
+                        // Other commands can be ignored in single-node mode.
+                        _ => {}
+                    }
+                }
+                Ok(())
+            };
+            join_set.spawn(local_processor_task);
         }
 
         let mining_task_fut = {
@@ -327,7 +374,6 @@ impl Node {
             let mempool_clone_miner = self.mempool.clone();
             let utxos_clone_miner = self.utxos.clone();
             let mining_tx_channel = tx_p2p_commands.clone();
-            let peers_present = !self.config.peers.is_empty();
             let proposals_clone_miner = self.proposals.clone();
             let wallet_clone_miner = self.wallet.clone();
             let mining_chain_id = self.mining_chain_id;
@@ -362,9 +408,7 @@ impl Node {
                         candidate_block.id,
                         candidate_block.transactions.len()
                     );
-                    
-                    // FIX: Correctly call the blocking `solve_pow` method.
-                    // The closure now returns the block on success, which is then used.
+
                     let mining_result = {
                         let miner_instance = miner_clone.clone();
                         tokio::task::spawn_blocking(move || {
@@ -379,8 +423,27 @@ impl Node {
                     debug!("MINING_LOOP_STEP_3: Mining (PoW) attempt finished.");
 
                     match mining_result {
-                        Ok(solved_block) => {
-                            
+                        Ok(mut solved_block) => {
+                            let signing_key = wallet_clone_miner.get_signing_key()?;
+                            let signing_data = crate::hyperdag::SigningData {
+                                parents: &solved_block.parents,
+                                transactions: &solved_block.transactions,
+                                timestamp: solved_block.timestamp,
+                                nonce: solved_block.nonce,
+                                difficulty: solved_block.difficulty,
+                                validator: &solved_block.validator,
+                                miner: &solved_block.miner,
+                                chain_id: solved_block.chain_id,
+                                merkle_root: &solved_block.merkle_root,
+                            };
+
+                            let pre_signature_data = crate::hyperdag::HyperBlock::serialize_for_signing(&signing_data)?;
+
+                            solved_block.lattice_signature = crate::hyperdag::LatticeSignature::sign(
+                                &signing_key.to_bytes(),
+                                &pre_signature_data
+                            )?;
+
                             if let Err(e) = saga_pallet_clone
                                 .evaluate_block_with_saga(&solved_block, &dag_clone_miner)
                                 .await
@@ -397,27 +460,18 @@ impl Node {
                             }
                             proposals_guard.push(solved_block.clone());
 
-                            if peers_present {
-                                if let Err(e_send) =
-                                    mining_tx_channel.try_send(P2PCommand::BroadcastBlock(solved_block))
-                                {
-                                    error!("Failed to send mined block to P2P channel: {e_send}");
-                                }
-                            } else {
-                                let mut dag_write_guard = dag_clone_miner.write().await;
-                                if let Err(e) =
-                                    dag_write_guard.add_block(solved_block, &utxos_clone_miner).await
-                                {
-                                    warn!(
-                                        "Failed to add self-mined block in single-node mode: {e}"
-                                    );
-                                }
+                            // *** FIX FOR HANGING ISSUE ***
+                            // The mining loop now *always* sends the block to the command channel.
+                            // It is no longer responsible for directly adding the block to the DAG.
+                            if let Err(e_send) =
+                                mining_tx_channel.send(P2PCommand::BroadcastBlock(solved_block)).await
+                            {
+                                error!("Failed to send mined block to command channel: {e_send}");
                             }
                         }
                         Err(e) => error!("An error occurred during mining: {e:?}"),
                     }
-
-                    time::sleep(Duration::from_millis(500)).await;
+                    time::sleep(Duration::from_millis(1200)).await;
                 }
             }
         };
@@ -448,7 +502,6 @@ impl Node {
                     .route("/health", get(health_check))
                     .route("/mempool", get(mempool_handler))
                     .route("/publish-readiness", get(publish_readiness_handler))
-                    // EVOLVED: Added an endpoint to interact with the SAGA Guidance System.
                     .route("/saga/ask", post(ask_saga))
                     .layer(middleware::from_fn_with_state(
                         rate_limiter_info.clone(),
@@ -564,28 +617,35 @@ async fn ask_saga(
 ) -> Result<Json<String>, StatusCode> {
     let dag_read = state.dag.read().await;
     let saga = &dag_read.saga;
-    
+
     // Provide SAGA with the current context for a more informed response.
     let network_state = *saga.economy.network_state.read().await;
     let threat_level = crate::omega::get_threat_level().await;
     let proactive_insight = saga.economy.proactive_insights.read().await.first().cloned();
 
-    match saga.guidance_system.get_guidance_response(
-        &payload.query,
-        network_state,
-        threat_level,
-        proactive_insight.as_ref(),
-    ).await {
+    match saga
+        .guidance_system
+        .get_guidance_response(
+            &payload.query,
+            network_state,
+            threat_level,
+            proactive_insight.as_ref(),
+        )
+        .await
+    {
         Ok(response) => Ok(Json(response)),
-        // FIX: Correctly pattern match the tuple variant.
-        Err(SagaError::AmbiguousQuery(_)) => Err(StatusCode::BAD_REQUEST),
+        Err(SagaError::AmbiguousQuery(topics)) => {
+            let error_message = format!("SAGA query is too ambiguous. Please be more specific. Possible topics: {topics:?}");
+            error!("{}", error_message);
+            // Returning the detailed error in the response body for better client-side debugging.
+            Ok(Json(error_message))
+        }
         Err(e) => {
             warn!("SAGA guidance query failed: {}", e);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
 }
-
 
 async fn info_handler(
     State(state): State<AppState>,
@@ -733,12 +793,22 @@ async fn submit_transaction(
     }
 
     let tx_id = tx_data.id.clone();
-    if let Err(e) = state.p2p_command_sender.send(P2PCommand::BroadcastTransaction(tx_data)).await {
-        error!("Failed to broadcast transaction {} to P2P task: {}", tx_id, e);
+    if let Err(e) = state
+        .p2p_command_sender
+        .send(P2PCommand::BroadcastTransaction(tx_data))
+        .await
+    {
+        error!(
+            "Failed to broadcast transaction {} to P2P task: {}",
+            tx_id, e
+        );
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
 
-    info!("Transaction {} submitted to mempool and broadcasted via API", tx_id);
+    info!(
+        "Transaction {} submitted to mempool and broadcasted via API",
+        tx_id
+    );
     Ok(Json(tx_id))
 }
 
@@ -781,6 +851,7 @@ async fn health_check() -> Result<Json<serde_json::Value>, StatusCode> {
     Ok(Json(serde_json::json!({ "status": "healthy" })))
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -789,7 +860,7 @@ mod tests {
     use rand::Rng;
     use serial_test::serial;
     use std::fs as std_fs;
-    
+
     #[tokio::test]
     #[serial]
     async fn test_node_creation_and_config_save() {
@@ -841,11 +912,10 @@ mod tests {
             temp_peer_cache_path.clone(),
         )
         .await;
-        
+
         if std::path::Path::new(db_path).exists() {
             std::fs::remove_dir_all(db_path).unwrap();
         }
-
 
         assert!(
             node_instance_result.is_ok(),
