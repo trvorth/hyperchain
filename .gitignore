@@ -74,6 +74,7 @@ node*/*.txt
 
 # --- Generated Project Files ---
 /header.tex
+/hyperchain-whitepaper.tex
 /mermaid-filter.err
 
 # --- Language & Framework Specific ---

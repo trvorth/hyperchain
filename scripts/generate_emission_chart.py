@@ -20,8 +20,8 @@ mpl.rcParams.update({
 })
 
 # Emission curve data
-years = np.array([0, 2, 4, 8, 16, 32])
-coins = np.array([500, 245, 120, 29, 1.7, 0.05])
+years = np.array([0, 2, 4, 8, 16])
+coins = np.array([250, 122.5, 60, 14.5, 0.85])
 
 # Create figure
 fig, ax = plt.subplots(figsize=(6, 3.5))

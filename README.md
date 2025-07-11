@@ -12,10 +12,10 @@
 
 ## **About HyperChain**
 
-**Website**: https://hyperchain.pro (coming soon)  
+**Website**: https://hyperchain.live (pre-engagement)  
 
 **Topics**: blockchain, layer-0, dag, rust, post-quantum-cryptography, fintech, decentralized-finance  
-HyperChain is a next-generation Layer-0 protocol implemented in Rust, designed to provide a scalable, interoperable, and secure foundation for decentralized applications and finance. Its heterogeneous architecture integrates Directed Acyclic Graphs (DAGs) for high-throughput parallel transaction processing with traditional PoW/PoS chains for robust security. Key features include dynamic sharding to adapt to transaction loads, a hybrid consensus mechanism combining Proof-of-Work for block proposals and Proof-of-Stake for deterministic finality, and post-quantum cryptography using lattice-based signatures (modeled after CRYSTALS-Dilithium) for long-term security. HyperChain also supports on-chain governance to enable seamless protocol upgrades and plans to incorporate advanced cryptographic tools like zk-SNARKs and homomorphic encryption for privacy-preserving features.
+Hyperchain is a highly modern blockchain platform that has been developed to guarantee the utmost security, performance, and integrity in all operational aspects.    It incorporates a novel consensus mechanism, an AI-driven governance structure, and a complex architecture for peer-to-peer networking.    On the other hand, Rust's Layer-0 protocol aims to provide a safe, scalable, and interoperable platform for decentralised applications and monetary transactions.    Its multi-faceted architecture mixes traditional Proof-of-Work (PoW) and Proof-of-Stake (PoS) chains with Directed Acyclic Graphs (DAGs) for high-throughput parallel transaction processing and enhanced security.    Essential features of post-quantum cryptography include a hybrid consensus framework that combines Proof-of-Work for block proposals and Proof-of-Stake for deterministic finality, dynamic sharding to accommodate large transaction volumes, and lattice-based signatures (inspired by CRYSTALS-Dilithium) for everlasting security.    HyperChain's goal is to make on-chain governance easier and more efficient while simultaneously improving privacy-preserving capabilities via the use of sophisticated cryptographic methods like zk-SNARKs and homomorphic encryption.
 
 While primarily a Layer-0 protocol facilitating interoperability across its ecosystem of shards and chains, HyperChain can host Layer-1-like chains within its framework, processing transactions and smart contracts independently. Additionally, its planned zk-SNARKs integration could enable Layer-2 scaling solutions, such as rollups, on its shards, enhancing throughput while leveraging HyperChain’s interoperability. Currently in Phase 1 (Foundation), the repository includes core components like the DAG ledger, node orchestrator, P2P networking, and wallet functionality, alongside documentation for local setup and testnet participation. Licensed under the MIT License, HyperChain welcomes community contributions to drive its vision of a future-proof decentralized ecosystem.
 
@@ -44,21 +44,39 @@ A key innovation in Hyperchain is ΛΣ-ΩMEGA™ (Lambda Sigma Omega), Conscious
 
 This mechanism allows the node to reject potentially harmful actions at a fundamental level, providing a robust defense against sophisticated network attacks. It doesn't protect the system, it becomes the system.
 
-## **SAGA (Sentient Autonomous Governance Algorithm)** 🧠
 
-At the heart of HyperChain's intelligence is the **SAGA**, an AI-driven system responsible for on-chain reputation, dynamic economics, and autonomous governance. It functions as the network's cognitive layer, ensuring long-term health, security, and adaptability.
+## SAGA (Sentient Autonomous Governance Algorithm) 🧠
 
-* **Cognitive Analytics Engine**: SAGA continuously analyzes validator behavior by scoring blocks against a multi-faceted set of heuristics, including validity, network contribution, temporal consistency, and metadata integrity. It uses a placeholder machine learning model (currently a decision tree, designed to be replaced with a more advanced architecture like a neural network) to predict behavior and identify anomalies, such as fee spamming or sophisticated threat patterns.
-* **Saga Credit Score (SCS)**: Every network participant is assigned a dynamic **Saga Credit Score (SCS)**. This on-chain reputation metric is a weighted blend of the trust score from the Cognitive Engine, long-term contributions (Karma), and staked capital. A high SCS leads to increased block rewards and greater influence in governance, creating a powerful incentive for positive behavior.
-* **Saga Guidance System**: An integrated "Saga Assistant" provides on-demand help to users and developers via an API endpoint. It uses a Natural Language Understanding (NLU) pipeline to perform intent recognition and entity extraction, allowing it to provide contextual answers about topics like staking, tokenomics, or network state.
-* **Autonomous Governance**: SAGA can autonomously propose changes to network parameters. By observing metrics like transaction volume, proposal rejection rates, and validator count, it can generate governance proposals to adjust the base transaction fee during congestion, lower the vote threshold to encourage participation, or modify the minimum validator stake to improve decentralization. This transforms network governance from a purely manual process to a collaborative human-AI system.
+At the core of HyperChain’s intelligence lies **SAGA**, an AI-powered governance engine that orchestrates on-chain reputation, adaptive tokenomics, and self-regulating policy. As the network’s cognitive layer, SAGA ensures sustainability, resilience, and long-term systemic integrity.
+
+* **Cognitive Analytics Engine**:  
+SAGA continuously evaluates validator behavior by analyzing blocks through a multidimensional heuristic framework—validity, network contribution, time consistency, and metadata fidelity. It currently operates on a decision tree model, serving as a placeholder for future deep learning models. This predictive engine identifies anomalies such as fee spamming, replay attempts, and network manipulation with temporal sensitivity.
+
+* **Saga Credit Score (SCS)**:  
+Each participant is assigned a dynamic **Saga Credit Score**—a composite of AI-derived trust scores, long-term karma (contribution weight), and staked assets. A higher SCS leads to greater governance weight and reduced block mining difficulty, thus incentivizing trustworthy behavior and improving network energy efficiency through **Proof-of-Sentiency (PoSe)**.
+
+* **Eco-Sentiency via PoCO**:  
+SAGA integrates **Proof-of-Carbon-Offset (PoCO)** to embed environmental accountability into consensus. Validator behavior and smart contracts are analyzed for carbon efficiency, influencing staking incentives and difficulty calibration. This allows HyperChain to scale sustainably with active carbon-consciousness embedded in its consensus engine.
+
+* **Saga Guidance System**:  
+Developers and users interact with SAGA through the **Saga Assistant API**, which employs a Natural Language Understanding (NLU) pipeline to extract user intent and relevant parameters. This assistant delivers real-time, context-aware responses related to staking, economic parameters, validator roles, and governance status.
+
+* **Autonomous Governance Framework**:  
+SAGA proactively recommends changes to network parameters based on system-wide analytics. It adjusts base fees during congestion, proposes voting threshold changes to enhance inclusivity, and dynamically modifies validator staking requirements to support decentralization. By bridging AI decision-making with human oversight, SAGA transforms governance into a collaborative, adaptive process.
 
 
 ## **Core Architectural Tenets**
 
+* **HyperDAG Ledger:** A Directed Acyclic Graph structure that allows for parallel block processing, high throughput, and near-instant finality.
+* **Hybrid Consensus (PoW + PoS + PoSe):** Hyperchain utilizes a unique, multi-layered consensus model:
+    * **Proof-of-Work (PoW):** A lightweight PoW mechanism is used to secure the network against spam and provide a basic sybil resistance layer. Miners compete to solve a computational puzzle to propose a new block.
+    * **Proof-of-Stake (PoS):** Validator nodes must stake HCN tokens to participate in consensus. The right to validate blocks is selected based on a stake-weighted algorithm, securing the network economically. Malicious behavior can result in a validator's stake being "slashed".
+    * **Proof-of-Stake-Evolution (PoSe):** This is the top-level consensus layer, managed by the **SAGA** AI pallet. SAGA continuously analyzes the behavior and contributions of all validators, calculating a dynamic "Saga Credit Score" (SCS). This score directly influences a validator's block rewards and governance power. PoSe ensures that the most honest, reliable, and beneficial nodes are rewarded the most, promoting long-term network health and evolution beyond simple stake-based metrics.
+* **SAGA (Sentient Autonomous Governance Algorithm):** A fully-integrated AI pallet that functions as the network's decentralized brain. It manages economic parameters, node reputation, and adaptive security protocols in real-time.
+* **X-PHYRUS™ Protocol Stack:** A military-grade pre-boot and runtime security suite that performs integrity checks and activates advanced operational protocols.
+* **ΩMEGA (TIA/RDS) Protocol:** A low-level identity and reflex protocol that provides a final layer of defense against unstable or dangerous system state transitions.
 * **Heterogeneous Architecture**: Natively supports both DAG-based shards and linear PoW/PoS chains within one interoperable ecosystem.  
 * **Dynamic Sharding**: The network autonomously adjusts the number of active DAG shards based on real-time transactional load, ensuring scalability.  
-* **Hybrid Consensus (PoW-DF)**: Combines permissionless Proof-of-Work for block proposal with Proof-of-Stake for deterministic finality.  
 * **Post-Quantum Security**: Implements a lattice-based signature scheme (modeled after NIST standard CRYSTALS-Dilithium) for all validator attestations, ensuring long-term security.  
 * **On-Chain Governance**: A decentralized, stake-weighted governance mechanism allows for protocol upgrades and parameter changes without contentious hard forks.  
 * **Advanced Cryptography**: Includes specifications for Zero-Knowledge Proofs (zk-SNARKs) and Homomorphic Encryption for future privacy-preserving features.  
@@ -69,11 +87,18 @@ At the heart of HyperChain's intelligence is the **SAGA**, an AI-driven system r
 The hyperchain repository is a Cargo workspace containing several key components:
 
 * **/src**: The main library crate containing the core logic.  
-  * **hyperdag.rs**: The DAG-based ledger implementation.  
-  * **node.rs**: The main node orchestrator.  
-  * **p2p.rs**: Peer-to-peer networking using libp2p.  
-  * **consensus.rs**: Consensus rules and Proof-of-Work logic.  
-  * **wallet.rs**: Wallet generation, encryption, and signing logic.  
+* `src/main.rs`: Entry point and CLI command parsing.
+* `src/node.rs`: Main node orchestration, managing all services.
+* `src/config.rs`: Configuration loading and validation.
+* `src/hyperdag.rs`: The core DAG ledger implementation.
+* `src/p2p.rs`: The libp2p-based peer-to-peer networking layer.
+* `src/miner.rs`: Proof-of-Work puzzle solving logic.
+* `src/transaction.rs`: Transaction creation and validation logic.
+* `src/wallet.rs`: Encrypted wallet management.
+* `src/saga.rs`: The AI governance and adaptive security pallet.
+* `src/omega.rs`: The system's core identity and reflex protocol.
+* `src/x_phyrus.rs`: The pre-boot security and diagnostics suite.
+* `src/zk.rs`: (Feature-gated) ZK-proof circuit definitions. 
 * **/src/bin**: Executable crates for the node (start\_node.rs) and wallet (hyperwallet.rs).  
 * **/docs**: Project documentation, including the whitepaper and launch plans.  
 * **config.toml.example**: An example configuration file for the node.
@@ -174,6 +199,8 @@ Building on Windows requires the MSVC C++ toolchain and manual installation of R
     ```bash
     cargo run --release --bin hyperwallet -- generate --output wallet.key
     ```
+        (You will be prompted for a secure password).
+    
    **Critical Notice**: The `Public Address` emitted by this operation must be copied. Furthermore, the associated `Mnemonic Phrase` must be transcribed and stored in a secure, offline medium for recovery purposes.
 
 2.  **Node Configuration**:
