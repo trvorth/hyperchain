@@ -190,13 +190,15 @@ This ensures a predictable, deflationary monetary policy adapted for a multi-cha
 The HyperCoin emission follows a disinflationary curve:
 
 ```math
-E(t) = 250 \cdot e^{-0.357t} \cdot \frac{1}{1 + 0.018t^{1.5}}
+E(t) = 250 ∙ e^(-0.357t)  ∙ 1/(1+〖0.018t〗^1.5 ) 
 ```
 
+
 Where:
-- $E_0$ = 250 (initial emission)
-- $\lambda$ = 0.357 (base decay rate)
-- $\beta$ = 0.018 (acceleration factor)
+    E(0) = 250 (initial emission)
+    λ= 0.357 (base decay rate)
+    β= 0.018 (acceleration factor)
+
 
 ![HCN Emission Schedule](docs/whitepaper/assets/hcn_emission_curve.png)
 
