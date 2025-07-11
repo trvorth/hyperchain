@@ -2,7 +2,6 @@
 
 use crate::emission::Emission;
 use crate::mempool::Mempool;
-// EVOLVED: Import the new CarbonOffsetCredential for inclusion in blocks.
 use crate::saga::{CarbonOffsetCredential, PalletSaga};
 use crate::transaction::Transaction;
 use ed25519_dalek::{Signature as DalekSignature, Signer, SigningKey, Verifier, VerifyingKey};
@@ -420,7 +419,7 @@ impl HyperBlock {
                     let mut hasher = Keccak256::new();
                     hasher.update(&chunk[0]);
                     hasher.update(&chunk[1]);
-                    hasher.finalize().to_vec()
+                    hasper.finalize().to_vec()
                 })
                 .collect();
         }
@@ -919,55 +918,106 @@ impl HyperDAG {
         block: &HyperBlock,
         utxos_arc: &Arc<RwLock<HashMap<String, UTXO>>>,
     ) -> Result<bool, HyperDAGError> {
-        if block.id.is_empty() { return Err(HyperDAGError::InvalidBlock("Block ID cannot be empty".to_string())); }
-        if block.transactions.is_empty() { return Err(HyperDAGError::InvalidBlock("Block must contain at least a coinbase transaction".to_string())); }
+        if block.id.is_empty() {
+            return Err(HyperDAGError::InvalidBlock(
+                "Block ID cannot be empty".to_string(),
+            ));
+        }
+        if block.transactions.is_empty() {
+            return Err(HyperDAGError::InvalidBlock(
+                "Block must contain at least a coinbase transaction".to_string(),
+            ));
+        }
         let serialized_size = serde_json::to_vec(&block)?.len();
-        if block.transactions.len() > MAX_TRANSACTIONS_PER_BLOCK || serialized_size > MAX_BLOCK_SIZE {
-            return Err(HyperDAGError::InvalidBlock(format!("Block exceeds size limits: {} txns, {} bytes", block.transactions.len(), serialized_size)));
+        if block.transactions.len() > MAX_TRANSACTIONS_PER_BLOCK || serialized_size > MAX_BLOCK_SIZE
+        {
+            return Err(HyperDAGError::InvalidBlock(format!(
+                "Block exceeds size limits: {} txns, {} bytes",
+                block.transactions.len(),
+                serialized_size
+            )));
         }
 
         let expected_merkle_root = HyperBlock::compute_merkle_root(&block.transactions)?;
-        if block.merkle_root != expected_merkle_root { return Err(HyperDAGError::MerkleRootMismatch); }
-        if !block.verify_signature()? { return Err(HyperDAGError::LatticeSignatureVerification); }
+        if block.merkle_root != expected_merkle_root {
+            return Err(HyperDAGError::MerkleRootMismatch);
+        }
+        if !block.verify_signature()? {
+            return Err(HyperDAGError::LatticeSignatureVerification);
+        }
 
         let target_hash_bytes = crate::miner::Miner::calculate_target_from_difficulty(block.difficulty);
         let block_pow_hash = block.hash();
-        if !crate::miner::Miner::hash_meets_target(&hex::decode(block_pow_hash).unwrap(), &target_hash_bytes) {
-            return Err(HyperDAGError::InvalidBlock("Proof-of-Work not satisfied".to_string()));
+        if !crate::miner::Miner::hash_meets_target(
+            &hex::decode(block_pow_hash).unwrap(),
+            &target_hash_bytes,
+        ) {
+            return Err(HyperDAGError::InvalidBlock(
+                "Proof-of-Work not satisfied".to_string(),
+            ));
         }
 
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
         if block.timestamp > now + TEMPORAL_CONSENSUS_WINDOW {
-            return Err(HyperDAGError::InvalidBlock(format!("Timestamp {} is too far in the future", block.timestamp)));
+            return Err(HyperDAGError::InvalidBlock(format!(
+                "Timestamp {} is too far in the future",
+                block.timestamp
+            )));
         }
 
         {
             let blocks_guard = self.blocks.read().await;
             for parent_id in &block.parents {
-                let parent_block = blocks_guard.get(parent_id).ok_or_else(|| HyperDAGError::InvalidParent(format!("Parent block {parent_id} not found")))?;
+                let parent_block = blocks_guard.get(parent_id).ok_or_else(|| {
+                    HyperDAGError::InvalidParent(format!("Parent block {parent_id} not found"))
+                })?;
                 if parent_block.chain_id != block.chain_id {
-                    return Err(HyperDAGError::InvalidParent(format!("Parent {} on chain {} but block {} on chain {}", parent_id, parent_block.chain_id, block.id, block.chain_id)));
+                    return Err(HyperDAGError::InvalidParent(format!(
+                        "Parent {} on chain {} but block {} on chain {}",
+                        parent_id, parent_block.chain_id, block.id, block.chain_id
+                    )));
                 }
                 if block.timestamp <= parent_block.timestamp {
-                     return Err(HyperDAGError::InvalidBlock(format!("Block timestamp {} is not after parent timestamp {}", block.timestamp, parent_block.timestamp)));
+                     return Err(HyperDAGError::InvalidBlock(format!(
+                         "Block timestamp {} is not after parent timestamp {}",
+                         block.timestamp, parent_block.timestamp
+                     )));
                 }
             }
              for (ref_chain_id, ref_block_id) in &block.cross_chain_references {
-                let ref_block = blocks_guard.get(ref_block_id).ok_or_else(|| HyperDAGError::CrossChainReferenceError(format!("Reference block {ref_block_id} not found")))?;
+                let ref_block = blocks_guard.get(ref_block_id).ok_or_else(|| {
+                    HyperDAGError::CrossChainReferenceError(format!(
+                        "Reference block {ref_block_id} not found"
+                    ))
+                })?;
                 if ref_block.chain_id != *ref_chain_id {
-                    return Err(HyperDAGError::CrossChainReferenceError(format!("Reference block {} on chain {} but expected chain {}", ref_block_id, ref_block.chain_id, ref_chain_id)));
+                    return Err(HyperDAGError::CrossChainReferenceError(format!(
+                        "Reference block {} on chain {} but expected chain {}",
+                        ref_block_id, ref_block.chain_id, ref_chain_id
+                    )));
                 }
             }
         }
 
         let coinbase_tx = &block.transactions[0];
-        if !coinbase_tx.inputs.is_empty() { return Err(HyperDAGError::InvalidBlock("First transaction must be a coinbase (no inputs)".to_string())); }
+        if !coinbase_tx.inputs.is_empty() {
+            return Err(HyperDAGError::InvalidBlock(
+                "First transaction must be a coinbase (no inputs)".to_string(),
+            ));
+        }
         let total_coinbase_output: u64 = coinbase_tx.outputs.iter().map(|o| o.amount).sum();
 
         let self_arc_strong = self.self_arc.upgrade().ok_or(HyperDAGError::SelfReferenceNotInitialized)?;
         let expected_reward = self.saga.calculate_dynamic_reward(block, &self_arc_strong).await?;
-        if block.reward != expected_reward { return Err(HyperDAGError::RewardMismatch(expected_reward, block.reward)); }
-        if total_coinbase_output != block.reward { return Err(HyperDAGError::RewardMismatch(block.reward, total_coinbase_output));}
+        if block.reward != expected_reward {
+            return Err(HyperDAGError::RewardMismatch(expected_reward, block.reward));
+        }
+        if total_coinbase_output != block.reward {
+            return Err(HyperDAGError::RewardMismatch(
+                block.reward,
+                total_coinbase_output,
+            ));
+        }
 
         let utxos_guard = utxos_arc.read().await;
         for tx in block.transactions.iter().skip(1) {
@@ -1014,17 +1064,19 @@ impl HyperDAG {
     ) -> Result<(), HyperDAGError> {
         let (sorted_timestamps, now) = {
             let blocks_guard = blocks_lock.read().await;
-            if blocks_guard.len() < 10 { return Ok(()) }
+            if blocks_guard.len() < 10 {
+                return Ok(());
+            }
             let current_time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-            let mut timestamps: Vec<u64> = blocks_guard
-                .values()
-                .map(|b| b.timestamp)
-                .collect();
+            let mut timestamps: Vec<u64> = blocks_guard.values().map(|b| b.timestamp).collect();
             timestamps.sort_unstable();
             (timestamps, current_time)
         };
 
-        let time_span = sorted_timestamps.last().unwrap_or(&now).saturating_sub(*sorted_timestamps.first().unwrap_or(&now));
+        let time_span = sorted_timestamps
+            .last()
+            .unwrap_or(&now)
+            .saturating_sub(*sorted_timestamps.first().unwrap_or(&now));
         let block_count_in_span = sorted_timestamps.len() as u64;
 
         if time_span == 0 || block_count_in_span <= 1 {
@@ -1033,19 +1085,29 @@ impl HyperDAG {
 
         let actual_time_per_block = time_span / (block_count_in_span - 1);
 
-        if actual_time_per_block == 0 { return Ok(()); }
+        if actual_time_per_block == 0 {
+            return Ok(());
+        }
 
         let adjustment_factor = target_block_time as f64 / actual_time_per_block as f64;
 
         let predictive_factor = {
             let mut history_guard = history_lock.write().await;
             history_guard.push((now, actual_time_per_block));
-            if history_guard.len() > 100 { history_guard.remove(0); }
+            if history_guard.len() > 100 {
+                history_guard.remove(0);
+            }
             if !history_guard.is_empty() {
-                let avg_hist_time: f64 = history_guard.iter().map(|&(_, t)| t as f64).sum::<f64>() / (history_guard.len() as f64);
-                if avg_hist_time == 0.0 { 1.0 }
-                else { target_block_time as f64 / avg_hist_time }
-            } else { 1.0 }
+                let avg_hist_time: f64 = history_guard.iter().map(|&(_, t)| t as f64).sum::<f64>()
+                    / (history_guard.len() as f64);
+                if avg_hist_time == 0.0 {
+                    1.0
+                } else {
+                    target_block_time as f64 / avg_hist_time
+                }
+            } else {
+                1.0
+            }
         };
 
         let mut difficulty_guard = difficulty_lock.write().await;
@@ -1074,11 +1136,15 @@ impl HyperDAG {
                     let mut current_id = tip_id.clone();
 
                     for _depth in 0..FINALIZATION_DEPTH {
-                        if finalized_guard.contains(&current_id) { break; }
+                        if finalized_guard.contains(&current_id) {
+                            break;
+                        }
 
                         if let Some(current_block) = blocks_guard.get(&current_id) {
                             path_to_finalize.push(current_id.clone());
-                            if current_block.parents.is_empty() { break; }
+                            if current_block.parents.is_empty() {
+                                break;
+                            }
                             current_id = current_block.parents[0].clone();
                         } else {
                             break;
@@ -1101,18 +1167,23 @@ impl HyperDAG {
     pub async fn dynamic_sharding(&self) -> Result<(), HyperDAGError> {
         let mut chain_loads_guard = self.chain_loads.write().await;
         let mut num_chains_guard = self.num_chains.write().await;
-        if chain_loads_guard.is_empty() { return Ok(()); }
+        if chain_loads_guard.is_empty() {
+            return Ok(());
+        }
 
         let total_load: u64 = chain_loads_guard.values().sum();
         let avg_load = total_load / (*num_chains_guard as u64).max(1);
         let split_threshold = avg_load.saturating_mul(SHARD_THRESHOLD as u64);
 
-        let chains_to_split: Vec<u32> = chain_loads_guard.iter()
+        let chains_to_split: Vec<u32> = chain_loads_guard
+            .iter()
             .filter(|(_, &load)| load > split_threshold)
             .map(|(&id, _)| id)
             .collect();
 
-        if chains_to_split.is_empty() { return Ok(()); }
+        if chains_to_split.is_empty() {
+            return Ok(());
+        }
 
         let initial_validator_placeholder = DEV_ADDRESS.to_string();
         let placeholder_key = vec![0u8; 32];
@@ -1122,7 +1193,9 @@ impl HyperDAG {
         let mut blocks_guard = self.blocks.write().await;
 
         for chain_id_to_split in chains_to_split {
-            if *num_chains_guard == u32::MAX { continue; }
+            if *num_chains_guard == u32::MAX {
+                continue;
+            }
 
             let new_chain_id = *num_chains_guard;
             *num_chains_guard += 1;
@@ -1136,9 +1209,14 @@ impl HyperDAG {
 
             let new_genesis_timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
             let mut genesis_block = HyperBlock::new(
-                new_chain_id, vec![], vec![], current_difficulty_val,
-                initial_validator_placeholder.clone(), initial_validator_placeholder.clone(), &placeholder_key,
-                new_genesis_timestamp
+                new_chain_id,
+                vec![],
+                vec![],
+                current_difficulty_val,
+                initial_validator_placeholder.clone(),
+                initial_validator_placeholder.clone(),
+                &placeholder_key,
+                new_genesis_timestamp,
             )?;
             genesis_block.reward = 0;
             let new_genesis_id = genesis_block.id.clone();
@@ -1201,7 +1279,7 @@ impl HyperDAG {
             })?;
             total_stake_val = validators_guard.values().sum();
         }
-        let mut proposals_guard = self.governance_proposals.write().await;
+        let mut proposals_guard = self.governance.proposals.write().await;
         let proposal_obj = proposals_guard
             .get_mut(&proposal_id)
             .ok_or_else(|| HyperDAGError::Governance("Proposal not found".to_string()))?;
@@ -1263,7 +1341,9 @@ impl HyperDAG {
         let total_stake_val: u64 = validators_guard.values().sum();
         if total_stake_val == 0 {
             let validator_keys: Vec<String> = validators_guard.keys().cloned().collect();
-            if validator_keys.is_empty() { return None; }
+            if validator_keys.is_empty() {
+                return None;
+            }
             let index = rand::thread_rng().gen_range(0..validator_keys.len());
             return Some(validator_keys[index].clone());
         }

@@ -58,7 +58,7 @@ lazy_static::lazy_static! {
 pub enum P2PError {
     #[error("Invalid configuration: {0}")]
     Config(String),
-    #[error("IO error: {0}")]
+    #[error("Io error: {0}")]
     Io(#[from] std::io::Error),
     #[error("Libp2p Core Transport error: {0}")]
     Libp2pTransport(#[from] libp2p::core::transport::TransportError<std::io::Error>),
@@ -187,7 +187,7 @@ pub enum P2PCommand {
 
 type KeyedPeerRateLimiter = RateLimiter<PeerId, DashMapStateStore<PeerId>, DefaultClock>;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct P2PConfig<'a> {
     pub topic_prefix: &'a str,
     pub listen_addresses: Vec<String>,
@@ -360,10 +360,11 @@ impl P2PServer {
                 P2PError::GossipsubConfig(format!("Error building Gossipsub config: {e_str}"))
             })?;
 
-        gossipsub::Behaviour::new(MessageAuthenticity::Signed(local_key), gossipsub_config)
-            .map_err(|e_str| {
+        gossipsub::Behaviour::new(MessageAuthenticity::Signed(local_key), gossipsub_config).map_err(
+            |e_str| {
                 P2PError::GossipsubConfig(format!("Error creating Gossipsub behaviour: {e_str}"))
-            })
+            },
+        )
     }
 
     fn subscribe_to_topics(
@@ -707,9 +708,7 @@ impl P2PServer {
         let msg_payload: NetworkMessage = match serde_json::from_slice(&message.data) {
             Ok(payload) => payload,
             Err(e) => {
-                warn!(
-                    "Failed to deserialize message from peer {source} on topic {topic_str}: {e}"
-                );
+                warn!("Failed to deserialize message from peer {source} on topic {topic_str}: {e}");
                 return;
             }
         };
@@ -779,9 +778,7 @@ impl P2PServer {
                 .await
             }
             NetworkMessageData::StateRequest => {
-                info!(
-                    "Received StateRequest from peer {source}. Preparing to send current state."
-                );
+                info!("Received StateRequest from peer {source}. Preparing to send current state.");
                 let dag_guard = context.dag.read().await;
 
                 let (blocks, current_utxos) = dag_guard.get_state_snapshot(0).await;
@@ -805,9 +802,7 @@ impl P2PServer {
                 // In a real implementation, we would add this to a separate pool
                 // for SAGA to process during block evaluation.
                 if let Err(e) = dag.saga.verify_and_store_credential(cred).await {
-                    warn!(
-                        "Invalid CarbonOffsetCredential received from {source}: {e}"
-                    );
+                    warn!("Invalid CarbonOffsetCredential received from {source}: {e}");
                 }
             }
         }

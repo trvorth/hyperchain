@@ -851,7 +851,6 @@ async fn health_check() -> Result<Json<serde_json::Value>, StatusCode> {
     Ok(Json(serde_json::json!({ "status": "healthy" })))
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
