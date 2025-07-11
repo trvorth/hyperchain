@@ -97,7 +97,7 @@ yarn-error.log*
 /deployment/payload/
 
 # --- Cargo & Rust Specific ---
-# Cargo.lock
+Cargo.lock
 
 # --- Documentation ---
 /docs/assets/diagrams/*.svg
