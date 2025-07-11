@@ -95,3 +95,12 @@ yarn-error.log*
 # Ignore local deployment archives
 /deployment/*.tar.gz
 /deployment/payload/
+
+# --- Cargo & Rust Specific ---
+# Cargo.lock
+
+# --- Documentation ---
+/docs/assets/diagrams/*.svg
+
+# --- Local Scripts ---
+/scripts/run_local_net.sh
