@@ -1,10 +1,11 @@
-//! 🪖 X-PHYRUS™ Protocol Stack (v0.3.0 - Fully Integrated Edition)
+//! 🪖 X-PHYRUS™ Protocol Stack (v0.4.0 - Hardened Edition)
 //! A groundbreaking, military-grade blockchain framework integrated directly into Hyperchain.
 //! This module provides advanced security, deployment, and operational integrity features.
 
 use crate::config::Config;
 use anyhow::{Context, Result};
 use log::{debug, error, info, warn};
+use rocksdb::Options;
 use std::env;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -94,14 +95,29 @@ async fn check_port_availability(config: &Config) -> Result<()> {
     Ok(())
 }
 
+// EVOLVED: This function is now more robust. Instead of just checking for the `CURRENT` file,
+// it attempts to open the database in read-only mode. This can detect corruption or a lock
+// from a previous unclean shutdown, preventing the node from hanging on startup.
 async fn check_chain_state_integrity() -> Result<()> {
     debug!("[X-PHYRUS::Zero-Hang™] Checking chain state integrity...");
-    if fs::metadata("./hyperdag_db/CURRENT").await.is_err() {
-        warn!("[INFO] Chain state DB not found. This is normal for a first run.");
-    } else {
-        info!("[OK] Chain state database appears to be present.");
+    const DB_PATH: &str = "hyperdag_db_evolved";
+    if !Path::new(DB_PATH).exists() {
+        warn!("[INFO] Chain state DB not found at '{DB_PATH}'. This is normal for a first run.");
+        return Ok(());
     }
-    Ok(())
+    
+    info!("[INFO] Found existing database at '{DB_PATH}'. Attempting to open read-only to verify integrity...");
+    let opts = Options::default();
+    match rocksdb::DB::open_for_read_only(&opts, DB_PATH, false) {
+        Ok(_) => {
+            info!("[OK] Chain state database opened successfully. Integrity check passed.");
+            Ok(())
+        },
+        Err(e) => {
+            error!("FATAL: Could not open existing chain state database: {e}. The database may be corrupt or locked by another process. Please resolve the issue before restarting. Halting startup.");
+            Err(anyhow::anyhow!("Chain state DB at '{}' is inaccessible or corrupt: {}", DB_PATH, e))
+        }
+    }
 }
 
 // --- 💣 2. DeepCore Sentinel™ ---
@@ -191,10 +207,10 @@ async fn init_cloud_anchor() -> Result<()> {
 }
 
 async fn init_phase_trace() -> Result<()> {
-    if fs::metadata("./hyperdag_db/CURRENT").await.is_ok() {
+    if fs::metadata("./hyperdag_db_evolved/CURRENT").await.is_ok() {
         info!("[X-PHYRUS::PhaseTrace™] DB backend verified. Traceable block propagation graph is ACTIVE.");
     } else {
-        info!("[X-YRUS::PhaseTrace™] DB backend not found. Traceability will activate on first write.");
+        info!("[X-PHYRUS::PhaseTrace™] DB backend not found. Traceability will activate on first write.");
     }
     Ok(())
 }

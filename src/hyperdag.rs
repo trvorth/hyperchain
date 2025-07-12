@@ -350,9 +350,7 @@ impl HyperBlock {
     /// **FIX**: This function now accepts a single `HyperBlockCreationData` struct as an argument
     /// to resolve the `too_many_arguments` clippy warning.
     #[instrument(skip(data))]
-    pub fn new(
-        data: HyperBlockCreationData,
-    ) -> Result<Self, HyperDAGError> {
+    pub fn new(data: HyperBlockCreationData) -> Result<Self, HyperDAGError> {
         let nonce = 0;
         let merkle_root = Self::compute_merkle_root(&data.transactions)?;
 
@@ -374,7 +372,8 @@ impl HyperBlock {
         let lattice_signature =
             LatticeSignature::sign(data.signing_key_material, &pre_signature_data_for_id)?;
 
-        let homomorphic_encrypted_data = data.transactions
+        let homomorphic_encrypted_data = data
+            .transactions
             .iter()
             .map(|tx| HomomorphicEncrypted::new(tx.amount, &lattice_signature.public_key))
             .collect();
@@ -401,7 +400,6 @@ impl HyperBlock {
             carbon_credentials: vec![],
         })
     }
-
 
     pub fn serialize_for_signing(data: &SigningData) -> Result<Vec<u8>, HyperDAGError> {
         let mut hasher = Keccak256::new();
@@ -667,7 +665,9 @@ impl HyperDAG {
             }
         }
 
-        let current_tips = tips_guard.entry(block.chain_id).or_insert_with(HashSet::new);
+        let current_tips = tips_guard
+            .entry(block.chain_id)
+            .or_insert_with(HashSet::new);
         for parent_id in &block.parents {
             current_tips.remove(parent_id);
         }
@@ -960,7 +960,8 @@ impl HyperDAG {
             ));
         }
         let serialized_size = serde_json::to_vec(&block)?.len();
-        if block.transactions.len() > MAX_TRANSACTIONS_PER_BLOCK || serialized_size > MAX_BLOCK_SIZE
+        if block.transactions.len() > MAX_TRANSACTIONS_PER_BLOCK
+            || serialized_size > MAX_BLOCK_SIZE
         {
             return Err(HyperDAGError::InvalidBlock(format!(
                 "Block exceeds size limits: {} txns, {} bytes",
@@ -989,7 +990,9 @@ impl HyperDAG {
             ));
         }
 
-        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)?
+            .as_secs();
         if block.timestamp > now + TEMPORAL_CONSENSUS_WINDOW {
             return Err(HyperDAGError::InvalidBlock(format!(
                 "Timestamp {} is too far in the future",
@@ -1048,7 +1051,10 @@ impl HyperDAG {
             .calculate_dynamic_reward(block, &self_arc_strong)
             .await?;
         if block.reward != expected_reward {
-            return Err(HyperDAGError::RewardMismatch(expected_reward, block.reward));
+            return Err(HyperDAGError::RewardMismatch(
+                expected_reward,
+                block.reward,
+            ));
         }
         if total_coinbase_output != block.reward {
             return Err(HyperDAGError::RewardMismatch(
@@ -1139,8 +1145,9 @@ impl HyperDAG {
                 history_guard.remove(0);
             }
             if !history_guard.is_empty() {
-                let avg_hist_time: f64 = history_guard.iter().map(|&(_, t)| t as f64).sum::<f64>()
-                    / (history_guard.len() as f64);
+                let avg_hist_time: f64 =
+                    history_guard.iter().map(|&(_, t)| t as f64).sum::<f64>()
+                        / (history_guard.len() as f64);
                 if avg_hist_time == 0.0 {
                     1.0
                 } else {
@@ -1248,7 +1255,9 @@ impl HyperDAG {
             chain_loads_guard.insert(chain_id_to_split, new_load_for_old);
             chain_loads_guard.insert(new_chain_id, new_load_for_new);
 
-            let new_genesis_timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+            let new_genesis_timestamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)?
+                .as_secs();
             let genesis_creation_data = HyperBlockCreationData {
                 chain_id: new_chain_id,
                 parents: vec![],
@@ -1268,7 +1277,9 @@ impl HyperDAG {
             new_tips.insert(new_genesis_id);
             tips_guard.insert(new_chain_id, new_tips);
 
-            info!("SHARDING: High load on chain {chain_id_to_split} triggered split. New chain {new_chain_id} created.");
+            info!(
+                "SHARDING: High load on chain {chain_id_to_split} triggered split. New chain {new_chain_id} created."
+            );
         }
         Ok(())
     }
@@ -1287,9 +1298,11 @@ impl HyperDAG {
         // Validation: Ensure the proposer has enough stake to create a proposal.
         {
             let validators_guard = self.validators.read().await;
-            let stake = validators_guard.get(&proposer_address).ok_or_else(|| {
-                HyperDAGError::Governance("Proposer not found or has no stake".to_string())
-            })?;
+            let stake = validators_guard
+                .get(&proposer_address)
+                .ok_or_else(|| {
+                    HyperDAGError::Governance("Proposer not found or has no stake".to_string())
+                })?;
             // Example requirement: 10x the minimum stake to propose.
             if *stake < MIN_VALIDATOR_STAKE * 10 {
                 return Err(HyperDAGError::Governance(
@@ -1445,6 +1458,37 @@ impl HyperDAG {
             }
         }
         (chain_blocks_map, utxos_map_for_chain)
+    }
+
+    /// **FIX FOR COMPILATION ERROR E0599**
+    /// This method provides the periodic maintenance functionality that was missing,
+    /// which caused compilation errors in `node.rs`. It handles tasks like
+    /// difficulty adjustment and other routine DAG health checks.
+    pub async fn run_periodic_maintenance(&self) -> Result<(), HyperDAGError> {
+        info!("Running periodic DAG maintenance...");
+
+        // Adjust difficulty
+        let difficulty_clone = self.difficulty.clone();
+        let blocks_clone = self.blocks.clone();
+        let history_clone = self.difficulty_history.clone();
+        let target_time = self.target_block_time;
+
+        if let Err(e) =
+            Self::adjust_difficulty(difficulty_clone, blocks_clone, history_clone, target_time)
+                .await
+        {
+            warn!("Failed to adjust difficulty: {e}");
+        }
+
+        // Finalize blocks
+        if let Err(e) = self.finalize_blocks().await {
+            warn!("Failed to finalize blocks: {e}");
+        }
+
+        // Other maintenance tasks can be added here in the future.
+
+        info!("Periodic DAG maintenance complete.");
+        Ok(())
     }
 }
 

@@ -1,4 +1,3 @@
-// src/node.rs
 use crate::config::{Config, ConfigError};
 use crate::hyperdag::{HyperBlock, HyperDAG, HyperDAGError, UTXO};
 use crate::mempool::Mempool;
@@ -14,6 +13,7 @@ use axum::{
     extract::{Path as AxumPath, State, State as MiddlewareState},
     http::{Request as HttpRequest, StatusCode},
     middleware::{self, Next},
+    response::IntoResponse,
     routing::{get, post},
     Json, Router,
 };
@@ -26,11 +26,11 @@ use nonzero_ext::nonzero;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use sp_core::H256;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 use tokio::fs;
 use tokio::signal;
@@ -42,6 +42,7 @@ use tracing::{debug, error, info, instrument, warn};
 const MAX_UTXOS: usize = 1_000_000;
 const MAX_PROPOSALS: usize = 10_000;
 const ADDRESS_REGEX: &str = r"^[0-9a-fA-F]{64}$";
+const MAX_SYNC_AGE_SECONDS: u64 = 3600; // 1 hour
 
 #[derive(Error, Debug)]
 pub enum NodeError {
@@ -73,6 +74,8 @@ pub enum NodeError {
     Io(#[from] std::io::Error),
     #[error("HyperDAG error: {0}")]
     HyperDAG(#[from] HyperDAGError),
+    #[error("Sync error: {0}")]
+    SyncError(String),
 }
 
 #[derive(Serialize, Debug)]
@@ -83,6 +86,7 @@ struct DagInfo {
     target_block_time: u64,
     validator_count: usize,
     num_chains: u32,
+    latest_block_timestamp: u64,
 }
 
 #[derive(Serialize, Debug)]
@@ -92,6 +96,7 @@ struct PublishReadiness {
     utxo_count: usize,
     peer_count: usize,
     mempool_size: usize,
+    is_synced: bool,
     issues: Vec<String>,
 }
 
@@ -216,7 +221,7 @@ impl Node {
                         amount: 100, // Genesis amount
                         tx_id: genesis_id_convention,
                         output_index: 0,
-                        explorer_link: format!("https://hyperblockexplorer.org/utxo/{utxo_id}"),
+                        explorer_link: format!("[https://hyperblockexplorer.org/utxo/](https://hyperblockexplorer.org/utxo/){utxo_id}"),
                     },
                 );
             }
@@ -256,9 +261,121 @@ impl Node {
     }
 
     pub async fn start(&self) -> Result<(), NodeError> {
-        // FIX: The receiver is now mutable so it can be moved into the appropriate task.
         let (tx_p2p_commands, mut rx_p2p_commands) = mpsc::channel::<P2PCommand>(100);
         let mut join_set: JoinSet<Result<(), NodeError>> = JoinSet::new();
+
+        let command_processor_task = {
+            let dag_clone = self.dag.clone();
+            let mempool_clone = self.mempool.clone();
+            let utxos_clone = self.utxos.clone();
+            let p2p_tx_clone = tx_p2p_commands.clone();
+
+            async move {
+                while let Some(command) = rx_p2p_commands.recv().await {
+                    match command {
+                        P2PCommand::BroadcastBlock(block) => {
+                            debug!("Command processor received block {}", block.id);
+                            // This atomic operation prevents race conditions between adding a block and updating DAG state.
+                            let mut dag = dag_clone.write().await;
+                            let add_result = dag.add_block(block, &utxos_clone).await;
+
+                            if matches!(add_result, Ok(true)) {
+                                info!("Successfully added new block to DAG. Running maintenance.");
+                                if let Err(e) = dag.run_periodic_maintenance().await {
+                                    warn!("Periodic maintenance failed after adding block: {}", e);
+                                }
+                            } else if let Err(e) = add_result {
+                                warn!("Block failed validation or processing: {}", e);
+                            }
+                        }
+                        P2PCommand::BroadcastTransaction(tx) => {
+                            debug!("Command processor received transaction {}", tx.id);
+                            let mempool_writer = mempool_clone.write().await;
+                            let dag_reader = dag_clone.read().await;
+                            let utxos_reader = utxos_clone.read().await;
+                            if let Err(e) = mempool_writer
+                                .add_transaction(tx, &utxos_reader, &dag_reader)
+                                .await
+                            {
+                                warn!("Failed to add transaction to mempool: {}", e);
+                            }
+                        }
+                        // This process is broken down into safer, atomic steps to prevent deadlocks and hanging.
+                        P2PCommand::SyncResponse { blocks, utxos } => {
+                            info!("Received state sync response with {} blocks and {} UTXOs.", blocks.len(), utxos.len());
+                            
+                            // Step 1: Update UTXO set atomically.
+                            {
+                                let mut utxos_writer = utxos_clone.write().await;
+                                let initial_utxo_count = utxos_writer.len();
+                                utxos_writer.extend(utxos);
+                                info!("UTXO set updated with {} new entries from sync.", utxos_writer.len() - initial_utxo_count);
+                            }
+
+                            // Step 2: Add blocks sequentially.
+                            if let Ok(sorted_blocks) = Self::topological_sort_blocks(blocks, &dag_clone).await {
+                                let mut added_count = 0;
+                                let mut failed_count = 0;
+                                for b in sorted_blocks {
+                                    // Use a write lock per block to avoid holding the lock for too long.
+                                    let mut dag_writer = dag_clone.write().await;
+                                    match dag_writer.add_block(b, &utxos_clone).await {
+                                        Ok(true) => added_count += 1,
+                                        Ok(false) => { /* block already exists */ },
+                                        Err(e) => {
+                                            warn!("Failed to add block from sync response: {}", e);
+                                            failed_count += 1;
+                                        }
+                                    }
+                                }
+                                info!("Block sync complete. Added: {}, Failed: {}.", added_count, failed_count);
+                            } else {
+                                error!("Failed to topologically sort blocks from sync response. Discarding batch.");
+                            }
+                            
+                            // Step 3: Run maintenance after all blocks are added.
+                            {
+                                let dag_writer = dag_clone.write().await;
+                                if let Err(e) = dag_writer.run_periodic_maintenance().await {
+                                    warn!("Periodic maintenance failed after state sync: {}", e);
+                                }
+                            }
+                        },
+                        P2PCommand::RequestState => {
+                            info!("Command processor noted a RequestState command. The P2P layer is responsible for acting on this.");
+                        },
+                        P2PCommand::RequestBlock { block_id, peer_id } => {
+                            info!("Received request for block {} from peer {}", block_id, peer_id);
+                            let dag_reader = dag_clone.read().await;
+                            let blocks_reader = dag_reader.blocks.read().await;
+                            if let Some(block) = blocks_reader.get(&block_id) {
+                                info!("Found block {}, sending to peer {}", block_id, peer_id);
+                                let cmd = P2PCommand::SendBlockToOnePeer { peer_id, block: Box::new(block.clone()) };
+                                if let Err(e) = p2p_tx_clone.send(cmd).await {
+                                    error!("Failed to send SendBlockToOnePeer command: {}", e);
+                                }
+                            } else {
+                                warn!("Peer {} requested block {} which we don't have.", peer_id, block_id);
+                            }
+                        }
+                        P2PCommand::SendBlockToOnePeer { .. } => {
+                            // This command is outbound, so the processor doesn't handle it directly.
+                            // The P2P layer will act on it.
+                        }
+                        // FIX: Handle new/unimplemented P2P Commands to prevent compile errors.
+                        P2PCommand::BroadcastState(_, _) => {
+                            warn!("Received unhandled P2PCommand: BroadcastState. This feature is not yet implemented.");
+                        }
+                        P2PCommand::BroadcastCarbonCredential(_) => {
+                            warn!("Received unhandled P2PCommand: BroadcastCarbonCredential. This feature is not yet implemented.");
+                        }
+                    }
+                }
+                Ok(())
+            }
+        };
+        join_set.spawn(command_processor_task);
+
 
         if !self.config.peers.is_empty() {
             info!("Peers detected in config, initializing P2P server task...");
@@ -275,6 +392,7 @@ impl Node {
             let network_id_clone = self.config.network_id.clone();
 
             let p2p_task_fut = async move {
+                let mut attempts = 0;
                 let mut p2p_server = loop {
                     let p2p_config = P2PConfig {
                         topic_prefix: &network_id_clone,
@@ -288,7 +406,7 @@ impl Node {
                         node_signing_key_material: &node_signing_key_bytes_for_p2p,
                         peer_cache_path: peer_cache_path_clone.clone(),
                     };
-                    info!("Attempting to initialize P2P server...");
+                    info!("Attempting to initialize P2P server (attempt {})...", attempts + 1);
                     match timeout(
                         Duration::from_secs(15),
                         P2PServer::new(p2p_config, p2p_command_sender_clone.clone()),
@@ -300,13 +418,16 @@ impl Node {
                             break server;
                         }
                         Ok(Err(e)) => {
-                            warn!("P2P server failed to initialize: {e}. Retrying in 5 seconds...");
+                            warn!("P2P server failed to initialize: {e}.");
                         }
                         Err(_) => {
-                            warn!("P2P server initialization timed out. Retrying in 5 seconds...");
+                            warn!("P2P server initialization timed out.");
                         }
                     }
-                    time::sleep(Duration::from_secs(5)).await;
+                    attempts += 1;
+                    let backoff_duration = Duration::from_secs(2u64.pow(attempts.min(6))); // Exponential backoff up to ~1min
+                    warn!("Retrying P2P initialization in {:?}", backoff_duration);
+                    time::sleep(backoff_duration).await;
                 };
 
                 if !p2p_initial_peers_config_clone.is_empty() {
@@ -318,54 +439,16 @@ impl Node {
                     }
                 }
 
+                let (_p2p_tx, p2p_rx) = mpsc::channel::<P2PCommand>(100);
+
                 p2p_server
-                    .run(rx_p2p_commands)
+                    .run(p2p_rx)
                     .await
                     .map_err(NodeError::P2PSpecific)
             };
             join_set.spawn(p2p_task_fut);
         } else {
-            // *** FIX FOR HANGING ISSUE ***
-            // In single-node mode, we now spawn a dedicated local command processor.
-            // This task drains the command channel, decoupling the mining loop from
-            // directly writing to the DAG and preventing deadlocks.
-            info!("No peers found. Spawning local command processor task for single-node mode.");
-            let local_dag = self.dag.clone();
-            let local_mempool = self.mempool.clone();
-            let local_utxos = self.utxos.clone();
-
-            let local_processor_task = async move {
-                while let Some(command) = rx_p2p_commands.recv().await {
-                    match command {
-                        P2PCommand::BroadcastBlock(block) => {
-                            debug!("Local processor received block {}", block.id);
-                            let mut dag_writer = local_dag.write().await;
-                            if let Err(e) = dag_writer.add_block(block, &local_utxos).await {
-                                warn!("Local processor failed to add block: {}", e);
-                            }
-                        }
-                        P2PCommand::BroadcastTransaction(tx) => {
-                            debug!("Local processor received transaction {}", tx.id);
-                            let mempool_writer = local_mempool.write().await;
-                            let dag_reader = local_dag.read().await;
-                            let utxos_reader = local_utxos.read().await;
-                            if let Err(e) = mempool_writer
-                                .add_transaction(tx, &utxos_reader, &dag_reader)
-                                .await
-                            {
-                                warn!(
-                                    "Local processor failed to add transaction to mempool: {}",
-                                    e
-                                );
-                            }
-                        }
-                        // Other commands can be ignored in single-node mode.
-                        _ => {}
-                    }
-                }
-                Ok(())
-            };
-            join_set.spawn(local_processor_task);
+            info!("No peers found. Running in single-node mode.");
         }
 
         let mining_task_fut = {
@@ -381,7 +464,22 @@ impl Node {
 
             async move {
                 loop {
+                    time::sleep(Duration::from_millis(500)).await;
                     debug!("MINING_LOOP_START: Preparing to mine a new block.");
+
+                    let is_synced = {
+                        let dag_reader = dag_clone_miner.read().await;
+                        let blocks_reader = dag_reader.blocks.read().await;
+                        let latest_timestamp = blocks_reader.values().map(|b| b.timestamp).max().unwrap_or(0);
+                        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+                        now.saturating_sub(latest_timestamp) < MAX_SYNC_AGE_SECONDS
+                    };
+
+                    if !is_synced {
+                        warn!("Node is not synced (latest block is too old). Pausing mining.");
+                        time::sleep(Duration::from_secs(30)).await;
+                        continue;
+                    }
 
                     mempool_clone_miner.write().await.prune_expired().await;
                     debug!("MINING_LOOP_STEP_1: Mempool pruned.");
@@ -412,10 +510,7 @@ impl Node {
                     let mining_result = {
                         let miner_instance = miner_clone.clone();
                         tokio::task::spawn_blocking(move || {
-                            match miner_instance.solve_pow(&mut candidate_block) {
-                                Ok(()) => Ok(candidate_block), // Return the modified block
-                                Err(e) => Err(e),
-                            }
+                            miner_instance.solve_pow(&mut candidate_block).map(|_| candidate_block)
                         })
                         .await?
                     };
@@ -451,8 +546,6 @@ impl Node {
                                 warn!("SAGA evaluation for block {} failed: {}", solved_block.id, e);
                             }
 
-                            info!("{}", solved_block);
-
                             let mut proposals_guard = proposals_clone_miner.write().await;
                             if proposals_guard.len() >= MAX_PROPOSALS && !proposals_guard.is_empty()
                             {
@@ -460,9 +553,7 @@ impl Node {
                             }
                             proposals_guard.push(solved_block.clone());
 
-                            // *** FIX FOR HANGING ISSUE ***
-                            // The mining loop now *always* sends the block to the command channel.
-                            // It is no longer responsible for directly adding the block to the DAG.
+                            info!("Mined block {}, broadcasting...", solved_block.id);
                             if let Err(e_send) =
                                 mining_tx_channel.send(P2PCommand::BroadcastBlock(solved_block)).await
                             {
@@ -576,6 +667,65 @@ impl Node {
         info!("Node::start() is exiting.");
         Ok(())
     }
+
+    async fn topological_sort_blocks(blocks: Vec<HyperBlock>, dag_arc: &Arc<RwLock<HyperDAG>>) -> Result<Vec<HyperBlock>, NodeError> {
+        if blocks.is_empty() { return Ok(vec![]); }
+    
+        let block_map: HashMap<String, HyperBlock> = blocks.into_iter().map(|b| (b.id.clone(), b)).collect();
+        let mut in_degree: HashMap<String, usize> = HashMap::new();
+        let mut children_map: HashMap<String, Vec<String>> = HashMap::new();
+        let dag_reader = dag_arc.read().await;
+        let local_blocks = dag_reader.blocks.read().await;
+    
+        for (id, block) in &block_map {
+            let mut degree = 0;
+            for parent_id in &block.parents {
+                if block_map.contains_key(parent_id) {
+                    degree += 1;
+                    children_map.entry(parent_id.clone()).or_default().push(id.clone());
+                } else if !local_blocks.contains_key(parent_id) {
+                    // This is a critical check. If a block's parent is not in the local DAG and also not in the sync batch,
+                    // we cannot process it. This indicates a disjoint graph.
+                    warn!("Sync Error: Block {} has a missing parent {} that is not in the local DAG or the sync batch.", id, parent_id);
+                    // Depending on strictness, you could either error out or just ignore this block and its descendants.
+                    // For now, we'll error out to be safe.
+                    return Err(NodeError::SyncError(format!("Missing parent {parent_id} for block {id} in sync batch")));
+                }
+            }
+            in_degree.insert(id.clone(), degree);
+        }
+    
+        let mut queue: VecDeque<String> = in_degree
+            .iter()
+            .filter(|(_, &degree)| degree == 0)
+            .map(|(id, _)| id.clone())
+            .collect();
+    
+        let mut sorted_blocks = Vec::with_capacity(block_map.len());
+        while let Some(id) = queue.pop_front() {
+            if let Some(children) = children_map.get(&id) {
+                for child_id in children {
+                    if let Some(degree) = in_degree.get_mut(child_id) {
+                        *degree -= 1;
+                        if *degree == 0 {
+                            queue.push_back(child_id.clone());
+                        }
+                    }
+                }
+            }
+            // We can safely unwrap here because we built the map from the same source.
+            sorted_blocks.push(block_map.get(&id).unwrap().clone());
+        }
+    
+        if sorted_blocks.len() != block_map.len() {
+            error!("Cycle detected in block sync batch or missing parent. This indicates a critical network error or data corruption. Sorted {} of {} blocks.", sorted_blocks.len(), block_map.len());
+            Err(NodeError::SyncError(
+                "Cycle detected or missing parent in block sync batch.".to_string(),
+            ))
+        } else {
+            Ok(sorted_blocks)
+        }
+    }
 }
 
 async fn rate_limit_layer(
@@ -610,15 +760,27 @@ struct SagaQuery {
     query: String,
 }
 
-/// API endpoint to interact with the SAGA Guidance System.
+#[derive(Serialize)]
+struct ApiError {
+    code: u16,
+    message: String,
+    details: Option<String>,
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> axum::response::Response {
+        let status = StatusCode::from_u16(self.code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        (status, Json(self)).into_response()
+    }
+}
+
 async fn ask_saga(
     State(state): State<AppState>,
     Json(payload): Json<SagaQuery>,
-) -> Result<Json<String>, StatusCode> {
+) -> Result<Json<String>, ApiError> {
     let dag_read = state.dag.read().await;
     let saga = &dag_read.saga;
 
-    // Provide SAGA with the current context for a more informed response.
     let network_state = *saga.economy.network_state.read().await;
     let threat_level = crate::omega::get_threat_level().await;
     let proactive_insight = saga.economy.proactive_insights.read().await.first().cloned();
@@ -637,12 +799,19 @@ async fn ask_saga(
         Err(SagaError::AmbiguousQuery(topics)) => {
             let error_message = format!("SAGA query is too ambiguous. Please be more specific. Possible topics: {topics:?}");
             error!("{}", error_message);
-            // Returning the detailed error in the response body for better client-side debugging.
-            Ok(Json(error_message))
+            Err(ApiError {
+                code: 400,
+                message: "Ambiguous query".to_string(),
+                details: Some(error_message),
+            })
         }
         Err(e) => {
             warn!("SAGA guidance query failed: {}", e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
+            Err(ApiError {
+                code: 500,
+                message: "Internal SAGA error".to_string(),
+                details: None,
+            })
         }
     }
 }
@@ -690,6 +859,7 @@ async fn publish_readiness_handler(
     let mempool_read_guard = state.mempool.read().await;
     let utxos_read_guard = state.utxos.read().await;
     let blocks_read_guard = dag_read_guard.blocks.read().await;
+    
     let mut issues = vec![];
     if blocks_read_guard.len() < 2 {
         issues.push("Insufficient blocks in DAG".to_string());
@@ -698,13 +868,22 @@ async fn publish_readiness_handler(
         issues.push("No UTXOs available".to_string());
     }
 
+    let latest_timestamp = blocks_read_guard.values().map(|b| b.timestamp).max().unwrap_or(0);
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    let is_synced = now.saturating_sub(latest_timestamp) < MAX_SYNC_AGE_SECONDS;
+
+    if !is_synced {
+        issues.push(format!("Node is out of sync. Last block is {} seconds old.", now.saturating_sub(latest_timestamp)));
+    }
+
     let is_ready = issues.is_empty();
     Ok(Json(PublishReadiness {
         is_ready,
         block_count: blocks_read_guard.len(),
         utxo_count: utxos_read_guard.len(),
-        peer_count: 0, // This would need access to P2P state to be accurate
+        peer_count: 0,
         mempool_size: mempool_read_guard.size().await,
+        is_synced,
         issues,
     }))
 }
@@ -712,10 +891,10 @@ async fn publish_readiness_handler(
 async fn get_balance(
     State(state): State<AppState>,
     AxumPath(address): AxumPath<String>,
-) -> Result<Json<u64>, StatusCode> {
+) -> Result<Json<u64>, ApiError> {
     if !Regex::new(ADDRESS_REGEX).unwrap().is_match(&address) {
         warn!("Invalid address format for balance check: {address}");
-        return Err(StatusCode::BAD_REQUEST);
+        return Err(ApiError { code: 400, message: "Invalid address format".to_string(), details: None });
     }
     let utxos_read_guard = state.utxos.read().await;
     let balance = utxos_read_guard
@@ -729,10 +908,10 @@ async fn get_balance(
 async fn get_utxos(
     State(state): State<AppState>,
     AxumPath(address): AxumPath<String>,
-) -> Result<Json<HashMap<String, UTXO>>, StatusCode> {
+) -> Result<Json<HashMap<String, UTXO>>, ApiError> {
     if !Regex::new(ADDRESS_REGEX).unwrap().is_match(&address) {
         warn!("Invalid address format for UTXO fetch: {address}");
-        return Err(StatusCode::BAD_REQUEST);
+        return Err(ApiError { code: 400, message: "Invalid address format".to_string(), details: None });
     }
     let utxos_read_guard = state.utxos.read().await;
     let filtered_utxos_map = utxos_read_guard
@@ -746,10 +925,10 @@ async fn get_utxos(
 async fn submit_transaction(
     State(state): State<AppState>,
     Json(tx_data): Json<Transaction>,
-) -> Result<Json<String>, StatusCode> {
+) -> Result<Json<String>, ApiError> {
     let tx_hash_bytes = match hex::decode(&tx_data.id) {
         Ok(bytes) => bytes,
-        Err(_) => return Err(StatusCode::BAD_REQUEST),
+        Err(_) => return Err(ApiError { code: 400, message: "Invalid transaction ID format".to_string(), details: None }),
     };
     let tx_hash = H256::from_slice(&tx_hash_bytes);
 
@@ -758,38 +937,19 @@ async fn submit_transaction(
             "ΛΣ-ΩMEGA Reflex Rejection: Transaction {} halted due to unstable system state.",
             tx_data.id
         );
-        return Err(StatusCode::SERVICE_UNAVAILABLE);
+        return Err(ApiError { code: 503, message: "System unstable, transaction rejected".to_string(), details: None });
     }
     info!(
         "ΛΣ-ΩMEGA Passed: Transaction {} approved for processing.",
         tx_data.id
     );
 
-    if !Regex::new(ADDRESS_REGEX).unwrap().is_match(&tx_data.sender)
-        || !Regex::new(ADDRESS_REGEX)
-            .unwrap()
-            .is_match(&tx_data.receiver)
-    {
-        warn!(
-            "Invalid sender or receiver address in transaction: {}",
-            tx_data.id
-        );
-        return Err(StatusCode::BAD_REQUEST);
-    }
-    if tx_data.amount == 0 && !tx_data.inputs.is_empty() {
-        warn!(
-            "Invalid transaction amount (0 for non-coinbase): {}",
-            tx_data.id
-        );
-        return Err(StatusCode::BAD_REQUEST);
-    }
-
     let utxos_read_guard = state.utxos.read().await;
     let dag_read_guard = state.dag.read().await;
 
     if let Err(e) = tx_data.verify(&dag_read_guard, &utxos_read_guard).await {
         warn!("Transaction {} failed verification via API: {}", tx_data.id, e);
-        return Err(StatusCode::BAD_REQUEST);
+        return Err(ApiError { code: 400, message: "Transaction verification failed".to_string(), details: Some(e.to_string()) });
     }
 
     let tx_id = tx_data.id.clone();
@@ -802,7 +962,7 @@ async fn submit_transaction(
             "Failed to broadcast transaction {} to P2P task: {}",
             tx_id, e
         );
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        return Err(ApiError { code: 500, message: "Internal server error".to_string(), details: None });
     }
 
     info!(
@@ -836,6 +996,7 @@ async fn get_dag(State(state): State<AppState>) -> Result<Json<DagInfo>, StatusC
     let validators_read_guard = dag_read_guard.validators.read().await;
     let difficulty_val = *dag_read_guard.difficulty.read().await;
     let num_chains_val = *dag_read_guard.num_chains.read().await;
+    let latest_block_timestamp = blocks_read_guard.values().map(|b| b.timestamp).max().unwrap_or(0);
 
     Ok(Json(DagInfo {
         block_count: blocks_read_guard.len(),
@@ -844,6 +1005,7 @@ async fn get_dag(State(state): State<AppState>) -> Result<Json<DagInfo>, StatusC
         target_block_time: dag_read_guard.target_block_time,
         validator_count: validators_read_guard.len(),
         num_chains: num_chains_val,
+        latest_block_timestamp,
     }))
 }
 

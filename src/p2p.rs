@@ -1,9 +1,6 @@
-// p2p.rs
-
 use crate::hyperdag::{HyperBlock, HyperDAG, LatticeSignature, UTXO};
 use crate::mempool::Mempool;
 use crate::node::PeerCache;
-// EVOLVED: Import the new CarbonOffsetCredential for network transport.
 use crate::saga::CarbonOffsetCredential;
 use crate::transaction::Transaction;
 use futures::stream::StreamExt;
@@ -177,13 +174,34 @@ impl NetworkMessage {
 
 #[derive(Debug, Clone)]
 pub enum P2PCommand {
+    /// Broadcast a newly mined or received block to the network.
     BroadcastBlock(HyperBlock),
+    /// Broadcast a new transaction to the network mempool.
     BroadcastTransaction(Transaction),
+    /// Request the full network state from a peer, typically on startup.
     RequestState,
+    /// Send a full state snapshot to the network in response to a request.
     BroadcastState(HashMap<String, HyperBlock>, HashMap<String, UTXO>),
-    // EVOLVED: Add new command for PoCO.
+    /// EVOLVED: Broadcast a verifiable carbon offset credential for the PoCO system.
     BroadcastCarbonCredential(CarbonOffsetCredential),
+    /// A direct response to a state request, containing blocks and UTXOs.
+    /// This is handled internally by the command processor.
+    SyncResponse {
+        blocks: Vec<HyperBlock>,
+        utxos: HashMap<String, UTXO>,
+    },
+    /// Request a specific block by its ID from a specific peer.
+    RequestBlock {
+        block_id: String,
+        peer_id: PeerId,
+    },
+    /// Send a specific block to a single peer that requested it.
+    SendBlockToOnePeer {
+        peer_id: PeerId,
+        block: Box<HyperBlock>,
+    },
 }
+
 
 type KeyedPeerRateLimiter = RateLimiter<PeerId, DashMapStateStore<PeerId>, DefaultClock>;
 
@@ -657,6 +675,30 @@ impl P2PServer {
                 )
                 .await
             }
+            P2PCommand::SyncResponse { .. } => {
+                // This command is intended for the node's command processor, not for the P2P layer to act on.
+                // It's an internal signal that a sync response has been received and needs processing.
+                // No action is needed here in the P2P server's command loop.
+                Ok(())
+            }
+            P2PCommand::RequestBlock { .. } => {
+                // Similar to SyncResponse, this is an inbound command that the node processor handles.
+                // The processor will then issue a `SendBlockToOnePeer` command if the block is found.
+                Ok(())
+            }
+            // FIX: Correctly handle the borrow-after-move error (E0382).
+            // The `block.id` is now accessed for the log message *before* the `block` value
+            // is moved into `NetworkMessageData::Block`, satisfying the borrow checker.
+            P2PCommand::SendBlockToOnePeer { peer_id, block } => {
+                warn!("SendBlockToOnePeer is not yet efficiently implemented. Broadcasting block {} instead of direct sending to {}.", block.id, peer_id);
+                let log_info = format!("block {} (for peer {})", block.id, peer_id);
+                self.broadcast_message(
+                    NetworkMessageData::Block(*block),
+                    0, // blocks topic
+                    &log_info,
+                )
+                .await
+            }
         }
     }
 
@@ -768,14 +810,16 @@ impl P2PServer {
                 .await
             }
             NetworkMessageData::State(blocks_map, new_utxos_map) => {
-                P2PServer::static_process_state_sync_data(
-                    blocks_map,
-                    new_utxos_map,
-                    source,
-                    context.dag,
-                    context.utxos,
-                )
-                .await
+                // This is a broadcasted state message. We should convert it into a `SyncResponse`
+                // and send it to the command processor to handle it in a structured way.
+                let blocks_vec = blocks_map.into_values().collect();
+                let cmd = P2PCommand::SyncResponse {
+                    blocks: blocks_vec,
+                    utxos: new_utxos_map,
+                };
+                if let Err(e) = context.p2p_command_sender.send(cmd).await {
+                    error!("Failed to forward state sync data to command processor: {e}");
+                }
             }
             NetworkMessageData::StateRequest => {
                 info!("Received StateRequest from peer {source}. Preparing to send current state.");
@@ -879,7 +923,8 @@ impl P2PServer {
             );
             return;
         }
-
+        
+        // FIX: Removed `mut` from `mempool_lock` as it's not mutated.
         let mempool_lock = mempool.write().await;
         let utxos_read_guard = utxos.read().await;
         let dag_read_guard = dag.read().await;
@@ -893,66 +938,6 @@ impl P2PServer {
         } else {
             info!("Added transaction {tx_id_for_log} from {source} to mempool.");
         }
-    }
-
-    async fn static_process_state_sync_data(
-        blocks_map: HashMap<String, HyperBlock>,
-        new_utxos_map: HashMap<String, UTXO>,
-        source: PeerId,
-        dag: Arc<RwLock<HyperDAG>>,
-        utxos_arc: Arc<RwLock<HashMap<String, UTXO>>>,
-    ) {
-        info!(
-            "Processing state sync data ({} blocks, {} UTXOs) from peer {}",
-            blocks_map.len(),
-            new_utxos_map.len(),
-            source
-        );
-
-        let mut dag_write_lock = match timeout(Duration::from_millis(1000), dag.write()).await {
-            Ok(guard) => guard,
-            Err(_) => {
-                warn!("Timeout acquiring DAG write lock for state sync from {source}");
-                return;
-            }
-        };
-
-        let mut added_blocks_count = 0;
-
-        let mut sorted_blocks: Vec<HyperBlock> = blocks_map.into_values().collect();
-        sorted_blocks.sort_by_key(|b| b.timestamp);
-
-        for block in sorted_blocks {
-            if !dag_write_lock.blocks.read().await.contains_key(&block.id) {
-                if let Err(e) = dag_write_lock.add_block(block.clone(), &utxos_arc).await {
-                    warn!(
-                        "Failed to add block {} during state sync from {}: {}",
-                        block.id, source, e
-                    );
-                } else {
-                    added_blocks_count += 1;
-                }
-            }
-        }
-        drop(dag_write_lock);
-
-        let mut utxos_write_lock =
-            match timeout(Duration::from_millis(500), utxos_arc.write()).await {
-                Ok(guard) => guard,
-                Err(_) => {
-                    warn!("Timeout acquiring UTXOs write lock for state sync from {source}");
-                    return;
-                }
-            };
-
-        utxos_write_lock.extend(new_utxos_map.into_iter());
-
-        info!(
-            "State sync: added {} blocks and updated UTXO set (now size {}) from peer: {}",
-            added_blocks_count,
-            utxos_write_lock.len(),
-            source
-        );
     }
 
     async fn check_mesh_peers(&mut self) {
