@@ -1,5 +1,5 @@
 //! --- Hyperchain Hybrid Consensus Engine ---
-//! v0.9.0 - Hybrid PoW/PoS/PoSe (Hardened & Eco-Sentiency Aware)
+//! v1.0.0 - Hybrid PoW/PoS/PoSe (Hardened & Eco-Sentiency Aware)
 //! This module implements the core consensus rules for the Hyperchain network.
 //! It uses a hybrid model that combines three critical, non-replaceable mechanisms:
 //!

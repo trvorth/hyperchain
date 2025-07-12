@@ -107,6 +107,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         vintage_year: 2024,
         // In a real system, this would be a cryptographic signature.
         verification_signature: "signed_by_verra".to_string(),
+        // FIX: Add the missing field to satisfy the compiler.
+        additionality_proof: "A mock proof statement or hash".to_string(),
     };
     println!(
         "Sample Carbon Offset Credential created: {} tonnes CO2",

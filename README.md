@@ -34,7 +34,7 @@ The **X-PHYRUS™ Protocol Stack** is a military-grade, pre-boot initialization 
 * **PhaseTrace™**: Verifies the database backend to enable a traceable block propagation graph for enhanced auditability.
 * **TraceForce-X™**: Activates a governance and compliance tracing stack when a `traceforce_watchlist.csv` file is present, ensuring regulatory adherence.
 
-## ΛΣ-ΩMEGA™ 🔒
+## ΛΣ-ΩMEGA™ Protocol 🔒
 
 A key innovation in Hyperchain is ΛΣ-ΩMEGA™ (Lambda Sigma Omega), Conscious Security Layer, a reflexive security module integrated directly into the node's core logic. It functions as a "digital immune system" by:
 
