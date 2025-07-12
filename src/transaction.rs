@@ -354,10 +354,10 @@ impl Transaction {
         hex::encode(&hasher.finalize()[..32])
     }
 
-    #[instrument(skip(self, dag, utxos))]
+    #[instrument(skip(self, _dag, utxos))]
     pub async fn verify(
         &self,
-        dag: &HyperDAG,
+        _dag: &HyperDAG,
         utxos: &HashMap<String, UTXO>,
     ) -> Result<(), TransactionError> {
         let verifier_lattice_sig = LatticeSignature {
