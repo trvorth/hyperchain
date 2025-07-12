@@ -2,7 +2,8 @@
 
 use crate::emission::Emission;
 use crate::mempool::Mempool;
-use crate::saga::{CarbonOffsetCredential, PalletSaga};
+// EVOLVED: Import the correct GovernanceProposal from the saga pallet.
+use crate::saga::{CarbonOffsetCredential, GovernanceProposal, PalletSaga, ProposalType};
 use crate::transaction::Transaction;
 use ed25519_dalek::{Signature as DalekSignature, Signer, SigningKey, Verifier, VerifyingKey};
 use hex;
@@ -23,6 +24,7 @@ use thiserror::Error;
 use tokio::sync::RwLock;
 use tokio::task;
 use tracing::instrument;
+use uuid::Uuid;
 
 // --- PUBLIC CONSTANTS ---
 pub const MAX_BLOCK_SIZE: usize = 20_000_000;
@@ -112,6 +114,19 @@ pub struct SigningData<'a> {
     pub miner: &'a str,
     pub chain_id: u32,
     pub merkle_root: &'a str,
+}
+
+/// **FIX**: This struct was created to resolve the `too_many_arguments` clippy warning.
+/// It encapsulates all the necessary data to create a new `HyperBlock`.
+pub struct HyperBlockCreationData<'a> {
+    pub chain_id: u32,
+    pub parents: Vec<String>,
+    pub transactions: Vec<Transaction>,
+    pub difficulty: u64,
+    pub validator: String,
+    pub miner: String,
+    pub signing_key_material: &'a [u8],
+    pub timestamp: u64,
 }
 
 #[derive(Debug)]
@@ -277,7 +292,7 @@ pub struct HyperBlock {
     pub lattice_signature: LatticeSignature,
     pub homomorphic_encrypted: Vec<HomomorphicEncrypted>,
     pub smart_contracts: Vec<SmartContract>,
-    // FIX: Add the missing carbon_credentials field.
+    // EVOLVED: Add a field for verifiable environmental credentials.
     #[serde(default)]
     pub carbon_credentials: Vec<CarbonOffsetCredential>,
 }
@@ -304,7 +319,19 @@ impl fmt::Display for HyperBlock {
             }
         )?;
         writeln!(f, "║ 🧾 Transactions:   {}", self.transactions.len())?;
-        writeln!(f, "║ 🌳 Merkle Root:    {}", self.merkle_root)?;
+        writeln!(f, "🌳 Merkle Root:    {}", self.merkle_root)?;
+        // EVOLVED: Display carbon offset information in the block summary.
+        let total_offset: f64 = self
+            .carbon_credentials
+            .iter()
+            .map(|c| c.tonnes_co2_sequestered)
+            .sum();
+        if total_offset > 0.0 {
+            writeln!(
+                f,
+                "║ 🌍 Carbon Offset:  {total_offset:.4} tonnes CO₂e"
+            )?;
+        }
         writeln!(f, "╟─ Mining Details ─{}╢", "─".repeat(70))?;
         writeln!(f, "║ ⛏️  Miner:           {}", self.miner)?;
         writeln!(f, "║ ✨ Nonce:          {}", self.nonce)?;
@@ -320,29 +347,24 @@ impl fmt::Display for HyperBlock {
 }
 
 impl HyperBlock {
-    #[instrument]
+    /// **FIX**: This function now accepts a single `HyperBlockCreationData` struct as an argument
+    /// to resolve the `too_many_arguments` clippy warning.
+    #[instrument(skip(data))]
     pub fn new(
-        chain_id: u32,
-        parents: Vec<String>,
-        transactions: Vec<Transaction>,
-        difficulty: u64,
-        validator: String,
-        miner: String,
-        signing_key_material: &[u8],
-        timestamp: u64,
+        data: HyperBlockCreationData,
     ) -> Result<Self, HyperDAGError> {
         let nonce = 0;
-        let merkle_root = Self::compute_merkle_root(&transactions)?;
+        let merkle_root = Self::compute_merkle_root(&data.transactions)?;
 
         let signing_data = SigningData {
-            parents: &parents,
-            transactions: &transactions,
-            timestamp,
+            parents: &data.parents,
+            transactions: &data.transactions,
+            timestamp: data.timestamp,
             nonce,
-            difficulty,
-            validator: &validator,
-            miner: &miner,
-            chain_id,
+            difficulty: data.difficulty,
+            validator: &data.validator,
+            miner: &data.miner,
+            chain_id: data.chain_id,
             merkle_root: &merkle_root,
         };
 
@@ -350,23 +372,23 @@ impl HyperBlock {
         let id = hex::encode(Keccak256::digest(&pre_signature_data_for_id));
 
         let lattice_signature =
-            LatticeSignature::sign(signing_key_material, &pre_signature_data_for_id)?;
+            LatticeSignature::sign(data.signing_key_material, &pre_signature_data_for_id)?;
 
-        let homomorphic_encrypted_data = transactions
+        let homomorphic_encrypted_data = data.transactions
             .iter()
             .map(|tx| HomomorphicEncrypted::new(tx.amount, &lattice_signature.public_key))
             .collect();
 
         Ok(Self {
-            chain_id,
+            chain_id: data.chain_id,
             id,
-            parents,
-            transactions,
-            difficulty,
-            validator,
-            miner,
+            parents: data.parents,
+            transactions: data.transactions,
+            difficulty: data.difficulty,
+            validator: data.validator,
+            miner: data.miner,
             nonce,
-            timestamp,
+            timestamp: data.timestamp,
             reward: 0,
             effort: 0,
             cross_chain_references: vec![],
@@ -375,10 +397,11 @@ impl HyperBlock {
             cross_chain_swaps: vec![],
             homomorphic_encrypted: homomorphic_encrypted_data,
             smart_contracts: vec![],
-            // FIX: Initialize the new field.
+            // EVOLVED: Initialize the new field.
             carbon_credentials: vec![],
         })
     }
+
 
     pub fn serialize_for_signing(data: &SigningData) -> Result<Vec<u8>, HyperDAGError> {
         let mut hasher = Keccak256::new();
@@ -419,7 +442,7 @@ impl HyperBlock {
                     let mut hasher = Keccak256::new();
                     hasher.update(&chunk[0]);
                     hasher.update(&chunk[1]);
-                    hasper.finalize().to_vec()
+                    hasher.finalize().to_vec()
                 })
                 .collect();
         }
@@ -475,7 +498,6 @@ pub struct HyperDAG {
     pub emission: Emission,
     pub num_chains: Arc<RwLock<u32>>,
     pub finalized_blocks: Arc<RwLock<HashSet<String>>>,
-    pub governance_proposals: Arc<RwLock<HashMap<String, GovernanceProposal>>>,
     pub chain_loads: Arc<RwLock<HashMap<u32, u64>>>,
     pub difficulty_history: Arc<RwLock<Vec<(u64, u64)>>>,
     pub block_creation_timestamps: Arc<RwLock<HashMap<String, u64>>>,
@@ -512,16 +534,17 @@ impl HyperDAG {
         let genesis_timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
 
         for chain_id_val in 0..num_chains {
-            let mut genesis_block = HyperBlock::new(
-                chain_id_val,
-                vec![],
-                vec![],
+            let genesis_creation_data = HyperBlockCreationData {
+                chain_id: chain_id_val,
+                parents: vec![],
+                transactions: vec![],
                 difficulty,
-                initial_validator.to_string(),
-                initial_validator.to_string(),
-                signing_key,
-                genesis_timestamp,
-            )?;
+                validator: initial_validator.to_string(),
+                miner: initial_validator.to_string(),
+                signing_key_material: signing_key,
+                timestamp: genesis_timestamp,
+            };
+            let mut genesis_block = HyperBlock::new(genesis_creation_data)?;
             genesis_block.reward = 0;
             let genesis_id = genesis_block.id.clone();
 
@@ -545,7 +568,6 @@ impl HyperDAG {
             emission: Emission::default_with_timestamp(genesis_timestamp, num_chains),
             num_chains: Arc::new(RwLock::new(num_chains.max(1))),
             finalized_blocks: Arc::new(RwLock::new(HashSet::new())),
-            governance_proposals: Arc::new(RwLock::new(HashMap::new())),
             chain_loads: Arc::new(RwLock::new(HashMap::new())),
             difficulty_history: Arc::new(RwLock::new(Vec::new())),
             block_creation_timestamps: Arc::new(RwLock::new(HashMap::new())),
@@ -823,19 +845,26 @@ impl HyperDAG {
             current_time.max(max_parent_timestamp + 1)
         };
 
-        let temp_block_for_reward_calc = HyperBlock::new(
-            chain_id_val,
-            parent_tips.clone(),
-            vec![],
-            *self.difficulty.read().await,
-            validator_address.to_string(),
-            validator_address.to_string(),
-            validator_signing_key,
-            new_timestamp,
-        )?;
+        let temp_block_creation_data = HyperBlockCreationData {
+            chain_id: chain_id_val,
+            parents: parent_tips.clone(),
+            transactions: vec![],
+            difficulty: *self.difficulty.read().await,
+            validator: validator_address.to_string(),
+            miner: validator_address.to_string(),
+            signing_key_material: validator_signing_key,
+            timestamp: new_timestamp,
+        };
+        let temp_block_for_reward_calc = HyperBlock::new(temp_block_creation_data)?;
 
-        let self_arc_strong = self.self_arc.upgrade().ok_or(HyperDAGError::SelfReferenceNotInitialized)?;
-        let reward = self.saga.calculate_dynamic_reward(&temp_block_for_reward_calc, &self_arc_strong).await?;
+        let self_arc_strong = self
+            .self_arc
+            .upgrade()
+            .ok_or(HyperDAGError::SelfReferenceNotInitialized)?;
+        let reward = self
+            .saga
+            .calculate_dynamic_reward(&temp_block_for_reward_calc, &self_arc_strong)
+            .await?;
 
         let dev_fee = (reward as f64 * DEV_FEE_RATE) as u64;
         let miner_reward = reward.saturating_sub(dev_fee);
@@ -863,7 +892,7 @@ impl HyperDAG {
             validator_address.to_string(),
             reward,
             validator_signing_key,
-            reward_outputs
+            reward_outputs,
         )?;
 
         let mut transactions_for_block = vec![reward_tx];
@@ -890,16 +919,17 @@ impl HyperDAG {
         }
 
         let current_difficulty = *self.difficulty.read().await;
-        let mut block = HyperBlock::new(
-            chain_id_val,
-            parent_tips,
-            transactions_for_block,
-            current_difficulty,
-            validator_address.to_string(),
-            validator_address.to_string(),
-            validator_signing_key,
-            new_timestamp,
-        )?;
+        let block_creation_data = HyperBlockCreationData {
+            chain_id: chain_id_val,
+            parents: parent_tips,
+            transactions: transactions_for_block,
+            difficulty: current_difficulty,
+            validator: validator_address.to_string(),
+            miner: validator_address.to_string(),
+            signing_key_material: validator_signing_key,
+            timestamp: new_timestamp,
+        };
+        let mut block = HyperBlock::new(block_creation_data)?;
         block.cross_chain_references = cross_chain_references;
         block.reward = reward;
 
@@ -907,7 +937,8 @@ impl HyperDAG {
             .write()
             .await
             .insert(block.id.clone(), new_timestamp);
-        *self.chain_loads.write().await.entry(chain_id_val).or_insert(0) += block.transactions.len() as u64;
+        *self.chain_loads.write().await.entry(chain_id_val).or_insert(0) +=
+            block.transactions.len() as u64;
 
         Ok(block)
     }
@@ -946,7 +977,8 @@ impl HyperDAG {
             return Err(HyperDAGError::LatticeSignatureVerification);
         }
 
-        let target_hash_bytes = crate::miner::Miner::calculate_target_from_difficulty(block.difficulty);
+        let target_hash_bytes =
+            crate::miner::Miner::calculate_target_from_difficulty(block.difficulty);
         let block_pow_hash = block.hash();
         if !crate::miner::Miner::hash_meets_target(
             &hex::decode(block_pow_hash).unwrap(),
@@ -978,13 +1010,13 @@ impl HyperDAG {
                     )));
                 }
                 if block.timestamp <= parent_block.timestamp {
-                     return Err(HyperDAGError::InvalidBlock(format!(
-                         "Block timestamp {} is not after parent timestamp {}",
-                         block.timestamp, parent_block.timestamp
-                     )));
+                    return Err(HyperDAGError::InvalidBlock(format!(
+                        "Block timestamp {} is not after parent timestamp {}",
+                        block.timestamp, parent_block.timestamp
+                    )));
                 }
             }
-             for (ref_chain_id, ref_block_id) in &block.cross_chain_references {
+            for (ref_chain_id, ref_block_id) in &block.cross_chain_references {
                 let ref_block = blocks_guard.get(ref_block_id).ok_or_else(|| {
                     HyperDAGError::CrossChainReferenceError(format!(
                         "Reference block {ref_block_id} not found"
@@ -1007,8 +1039,14 @@ impl HyperDAG {
         }
         let total_coinbase_output: u64 = coinbase_tx.outputs.iter().map(|o| o.amount).sum();
 
-        let self_arc_strong = self.self_arc.upgrade().ok_or(HyperDAGError::SelfReferenceNotInitialized)?;
-        let expected_reward = self.saga.calculate_dynamic_reward(block, &self_arc_strong).await?;
+        let self_arc_strong = self
+            .self_arc
+            .upgrade()
+            .ok_or(HyperDAGError::SelfReferenceNotInitialized)?;
+        let expected_reward = self
+            .saga
+            .calculate_dynamic_reward(block, &self_arc_strong)
+            .await?;
         if block.reward != expected_reward {
             return Err(HyperDAGError::RewardMismatch(expected_reward, block.reward));
         }
@@ -1026,8 +1064,11 @@ impl HyperDAG {
 
         let anomaly_score = self.detect_anomaly(block).await?;
         if anomaly_score > 0.7 {
-             ANOMALIES_DETECTED.inc();
-             warn!("High anomaly score ({}) detected for block {}", anomaly_score, block.id);
+            ANOMALIES_DETECTED.inc();
+            warn!(
+                "High anomaly score ({}) detected for block {}",
+                anomaly_score, block.id
+            );
         }
 
         Ok(true)
@@ -1208,16 +1249,17 @@ impl HyperDAG {
             chain_loads_guard.insert(new_chain_id, new_load_for_new);
 
             let new_genesis_timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-            let mut genesis_block = HyperBlock::new(
-                new_chain_id,
-                vec![],
-                vec![],
-                current_difficulty_val,
-                initial_validator_placeholder.clone(),
-                initial_validator_placeholder.clone(),
-                &placeholder_key,
-                new_genesis_timestamp,
-            )?;
+            let genesis_creation_data = HyperBlockCreationData {
+                chain_id: new_chain_id,
+                parents: vec![],
+                transactions: vec![],
+                difficulty: current_difficulty_val,
+                validator: initial_validator_placeholder.clone(),
+                miner: initial_validator_placeholder.clone(),
+                signing_key_material: &placeholder_key,
+                timestamp: new_genesis_timestamp,
+            };
+            let mut genesis_block = HyperBlock::new(genesis_creation_data)?;
             genesis_block.reward = 0;
             let new_genesis_id = genesis_block.id.clone();
 
@@ -1230,39 +1272,58 @@ impl HyperDAG {
         }
         Ok(())
     }
-    #[instrument]
+    /// **FIX FOR COMPILATION ERROR E0308**
+    /// This function now correctly creates a `saga::GovernanceProposal` and inserts it
+    /// into the SAGA governance state, resolving the type mismatch. The proposal's
+    /// `proposal_type` is now correctly constructed using the `saga::ProposalType` enum.
+    #[instrument(skip(self, proposer_address, rule_name, new_value))]
     pub async fn propose_governance(
         &self,
-        proposer: String,
-        description: String,
+        proposer_address: String,
+        rule_name: String,
+        new_value: f64,
+        creation_epoch: u64,
     ) -> Result<String, HyperDAGError> {
-        let proposal_id_val;
+        // Validation: Ensure the proposer has enough stake to create a proposal.
         {
             let validators_guard = self.validators.read().await;
-            let stake_val = validators_guard.get(&proposer).ok_or_else(|| {
+            let stake = validators_guard.get(&proposer_address).ok_or_else(|| {
                 HyperDAGError::Governance("Proposer not found or has no stake".to_string())
             })?;
-            if *stake_val < MIN_VALIDATOR_STAKE * 10 {
+            // Example requirement: 10x the minimum stake to propose.
+            if *stake < MIN_VALIDATOR_STAKE * 10 {
                 return Err(HyperDAGError::Governance(
-                    "Insufficient stake to propose".to_string(),
+                    "Insufficient stake to create a governance proposal.".to_string(),
                 ));
             }
-            proposal_id_val = hex::encode(Keccak256::digest(description.as_bytes()));
         }
+
+        let proposal_id_val = format!("saga-proposal-{}", Uuid::new_v4());
+        // Create an instance of the correct `GovernanceProposal` struct from the `saga` module.
         let proposal_obj = GovernanceProposal {
-            proposal_id: proposal_id_val.clone(),
-            proposer,
-            description,
-            votes_for: 0,
-            votes_against: 0,
-            active: true,
+            id: proposal_id_val.clone(),
+            proposer: proposer_address,
+            // Use the `ProposalType` enum from the `saga` module.
+            proposal_type: ProposalType::UpdateRule(rule_name, new_value),
+            votes_for: 0.0,
+            votes_against: 0.0,
+            status: crate::saga::ProposalStatus::Voting,
+            voters: vec![], // Initialize with an empty list of voters.
+            creation_epoch,
         };
-        self.governance_proposals
+
+        // Insert the correctly typed proposal object into the SAGA governance proposals map.
+        self.saga
+            .governance
+            .proposals
             .write()
             .await
             .insert(proposal_id_val.clone(), proposal_obj);
+
+        info!("New governance proposal {} submitted.", proposal_id_val);
         Ok(proposal_id_val)
     }
+
     #[instrument]
     pub async fn vote_governance(
         &self,
@@ -1279,36 +1340,33 @@ impl HyperDAG {
             })?;
             total_stake_val = validators_guard.values().sum();
         }
-        let mut proposals_guard = self.governance.proposals.write().await;
+        let mut proposals_guard = self.saga.governance.proposals.write().await;
         let proposal_obj = proposals_guard
             .get_mut(&proposal_id)
             .ok_or_else(|| HyperDAGError::Governance("Proposal not found".to_string()))?;
-        if !proposal_obj.active {
+        if proposal_obj.status != crate::saga::ProposalStatus::Voting {
             return Err(HyperDAGError::Governance(
                 "Proposal is not active".to_string(),
             ));
         }
         if vote_for {
-            proposal_obj.votes_for += stake_val;
+            proposal_obj.votes_for += stake_val as f64;
         } else {
-            proposal_obj.votes_against += stake_val;
+            proposal_obj.votes_against += stake_val as f64;
         }
         if total_stake_val == 0 {
             warn!("Total stake in the system is 0, governance vote cannot pass/fail based on stake percentage.");
             return Ok(());
         }
-        if proposal_obj.votes_for > total_stake_val * 2 / 3 {
+        // Example passing/failing logic - this would be handled by SAGA's epoch processing
+        let rules = self.saga.economy.epoch_rules.read().await;
+        let vote_threshold = rules
+            .get("proposal_vote_threshold")
+            .map_or(100.0, |r| r.value);
+        if proposal_obj.votes_for >= vote_threshold {
             info!(
-                "Governance proposal {} passed: {}",
-                proposal_id, proposal_obj.description
+                "Governance proposal {proposal_id} has enough votes to pass pending epoch tally."
             );
-            proposal_obj.active = false;
-        } else if proposal_obj.votes_against > total_stake_val / 2 {
-            info!(
-                "Governance proposal {} rejected: {}",
-                proposal_id, proposal_obj.description
-            );
-            proposal_obj.active = false;
         }
         Ok(())
     }
@@ -1389,15 +1447,7 @@ impl HyperDAG {
         (chain_blocks_map, utxos_map_for_chain)
     }
 }
-#[derive(Clone, Serialize, Deserialize, Debug)]
-pub struct GovernanceProposal {
-    pub proposal_id: String,
-    pub proposer: String,
-    pub description: String,
-    pub votes_for: u64,
-    pub votes_against: u64,
-    pub active: bool,
-}
+
 impl Clone for HyperDAG {
     fn clone(&self) -> Self {
         Self {
@@ -1409,7 +1459,6 @@ impl Clone for HyperDAG {
             emission: self.emission.clone(),
             num_chains: self.num_chains.clone(),
             finalized_blocks: self.finalized_blocks.clone(),
-            governance_proposals: self.governance_proposals.clone(),
             chain_loads: self.chain_loads.clone(),
             difficulty_history: self.difficulty_history.clone(),
             block_creation_timestamps: self.block_creation_timestamps.clone(),

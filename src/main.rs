@@ -1,5 +1,3 @@
-// main.rs
-
 use clap::{Parser, Subcommand};
 use hyperchain::{
     config::{Config, ConfigError},

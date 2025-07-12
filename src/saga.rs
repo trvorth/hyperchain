@@ -465,8 +465,6 @@ impl CognitiveAnalyticsEngine {
         // The score is based on the amount of CO2 offset, normalized.
         // This is a simple model; a real one would be more complex.
         // A 10-tonne offset gives a score of ~0.63.
-        
-
         (1.0 - (-total_offset / 10.0).exp()).clamp(0.0, 1.0)
     }
 
