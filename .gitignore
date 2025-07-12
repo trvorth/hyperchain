@@ -76,6 +76,8 @@ node*/*.txt
 /header.tex
 /hyperchain-whitepaper.tex
 /mermaid-filter.err
+/scripts
+/docs/whitepaper/assets
 
 # --- Language & Framework Specific ---
 # Python
