@@ -1,8 +1,3 @@
-//! --- SAGA Simulation Environment ---
-//! This binary is a lightweight testbed for simulating and validating
-//! core components of the Hyperchain, particularly the SAGA pallet and
-//! the structure of HyperBlocks.
-
 use hyperchain::hyperdag::{HyperBlock, HyperDAG, UTXO};
 use hyperchain::saga::{CarbonOffsetCredential, PalletSaga};
 use hyperchain::transaction::{Input, Output, Transaction, TransactionConfig};

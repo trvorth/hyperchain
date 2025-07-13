@@ -521,7 +521,8 @@ impl HyperDAG {
         let db = task::spawn_blocking(|| {
             let mut opts = Options::default();
             opts.create_if_missing(true);
-            DB::open(&opts, "hyperdag_db")
+            // HANG FIX: Corrected DB path to match the pre-boot integrity check.
+            DB::open(&opts, "hyperdag_db_evolved")
         })
         .await?
         .map_err(|e| HyperDAGError::DatabaseError(e.to_string()))?;
@@ -597,11 +598,9 @@ impl HyperDAG {
         total_txs as f64 / blocks_guard.len() as f64
     }
 
-    /// Adds a block to the DAG after comprehensive validation.
-    ///
-    /// NOTE: As of v0.2.2, this function no longer triggers difficulty adjustment.
-    /// The caller is responsible for calling `HyperDAG::adjust_difficulty` after a block
-    /// is successfully added to prevent potential deadlocks in the concurrent runtime.
+    /// **HANG FIX:** This function is now streamlined to perform only the critical,
+    /// atomic actions required to add a block to the DAG. Heavier maintenance operations
+    /// have been removed to prevent deadlocks and are now handled by `run_periodic_maintenance`.
     #[instrument(skip(self, block, utxos_arc))]
     pub async fn add_block(
         &mut self,
@@ -688,8 +687,8 @@ impl HyperDAG {
             .update_supply(block_for_db.reward)
             .map_err(HyperDAGError::EmissionError)?;
 
-        self.finalize_blocks().await?;
-        self.dynamic_sharding().await?;
+        // HANG FIX: Removed calls to self.finalize_blocks() and self.dynamic_sharding().
+        // These are now handled by the periodic maintenance task to prevent deadlocks.
 
         BLOCKS_PROCESSED.inc();
         TRANSACTIONS_PROCESSED.inc_by(block_for_db.transactions.len() as u64);
@@ -1211,10 +1210,19 @@ impl HyperDAG {
         }
         Ok(())
     }
+
+    /// **HANG FIX:** To prevent an AB-BA deadlock between this function and `create_candidate_block`,
+    /// the lock acquisition order has been made consistent. Locks are now acquired in a
+    /// predefined order (`blocks` -> `tips` -> `chain_loads` -> `num_chains`) to ensure
+    /// deadlock-free concurrent execution.
     #[instrument]
     pub async fn dynamic_sharding(&self) -> Result<(), HyperDAGError> {
+        // HANG FIX: Enforce a strict lock acquisition order to prevent deadlocks.
+        let mut blocks_guard = self.blocks.write().await;
+        let mut tips_guard = self.tips.write().await;
         let mut chain_loads_guard = self.chain_loads.write().await;
         let mut num_chains_guard = self.num_chains.write().await;
+        
         if chain_loads_guard.is_empty() {
             return Ok(());
         }
@@ -1236,9 +1244,6 @@ impl HyperDAG {
         let initial_validator_placeholder = DEV_ADDRESS.to_string();
         let placeholder_key = vec![0u8; 32];
         let current_difficulty_val = *self.difficulty.read().await;
-
-        let mut tips_guard = self.tips.write().await;
-        let mut blocks_guard = self.blocks.write().await;
 
         for chain_id_to_split in chains_to_split {
             if *num_chains_guard == u32::MAX {
@@ -1283,6 +1288,7 @@ impl HyperDAG {
         }
         Ok(())
     }
+
     /// **FIX FOR COMPILATION ERROR E0308**
     /// This function now correctly creates a `saga::GovernanceProposal` and inserts it
     /// into the SAGA governance state, resolving the type mismatch. The proposal's
@@ -1460,10 +1466,10 @@ impl HyperDAG {
         (chain_blocks_map, utxos_map_for_chain)
     }
 
-    /// **FIX FOR COMPILATION ERROR E0599**
-    /// This method provides the periodic maintenance functionality that was missing,
-    /// which caused compilation errors in `node.rs`. It handles tasks like
-    /// difficulty adjustment and other routine DAG health checks.
+    /// **HANG FIX:** This function now handles all heavy, periodic maintenance tasks,
+    /// including difficulty adjustment, block finalization, and dynamic sharding.
+    /// By consolidating these tasks here and removing them from the `add_block` hot path,
+    /// we prevent deadlocks and ensure the node remains responsive.
     pub async fn run_periodic_maintenance(&self) -> Result<(), HyperDAGError> {
         info!("Running periodic DAG maintenance...");
 
@@ -1477,15 +1483,18 @@ impl HyperDAG {
             Self::adjust_difficulty(difficulty_clone, blocks_clone, history_clone, target_time)
                 .await
         {
-            warn!("Failed to adjust difficulty: {e}");
+            warn!("Failed to adjust difficulty during maintenance: {e}");
         }
 
         // Finalize blocks
         if let Err(e) = self.finalize_blocks().await {
-            warn!("Failed to finalize blocks: {e}");
+            warn!("Failed to finalize blocks during maintenance: {e}");
         }
 
-        // Other maintenance tasks can be added here in the future.
+        // Perform dynamic sharding as part of periodic maintenance.
+        if let Err(e) = self.dynamic_sharding().await {
+            warn!("Failed to run dynamic sharding during maintenance: {e}");
+        }
 
         info!("Periodic DAG maintenance complete.");
         Ok(())
