@@ -2,7 +2,6 @@
 
 use crate::emission::Emission;
 use crate::mempool::Mempool;
-// EVOLVED: Import the correct GovernanceProposal from the saga pallet.
 use crate::saga::{CarbonOffsetCredential, GovernanceProposal, PalletSaga, ProposalType};
 use crate::transaction::Transaction;
 use ed25519_dalek::{Signature as DalekSignature, Signer, SigningKey, Verifier, VerifyingKey};
@@ -600,7 +599,8 @@ impl HyperDAG {
 
     /// **HANG FIX:** This function is now streamlined to perform only the critical,
     /// atomic actions required to add a block to the DAG. Heavier maintenance operations
-    /// have been removed to prevent deadlocks and are now handled by `run_periodic_maintenance`.
+    /// like `finalize_blocks` and `dynamic_sharding` have been removed to prevent
+    /// deadlocks and are now handled by `run_periodic_maintenance`.
     #[instrument(skip(self, block, utxos_arc))]
     pub async fn add_block(
         &mut self,
@@ -1210,19 +1210,10 @@ impl HyperDAG {
         }
         Ok(())
     }
-
-    /// **HANG FIX:** To prevent an AB-BA deadlock between this function and `create_candidate_block`,
-    /// the lock acquisition order has been made consistent. Locks are now acquired in a
-    /// predefined order (`blocks` -> `tips` -> `chain_loads` -> `num_chains`) to ensure
-    /// deadlock-free concurrent execution.
     #[instrument]
     pub async fn dynamic_sharding(&self) -> Result<(), HyperDAGError> {
-        // HANG FIX: Enforce a strict lock acquisition order to prevent deadlocks.
-        let mut blocks_guard = self.blocks.write().await;
-        let mut tips_guard = self.tips.write().await;
         let mut chain_loads_guard = self.chain_loads.write().await;
         let mut num_chains_guard = self.num_chains.write().await;
-        
         if chain_loads_guard.is_empty() {
             return Ok(());
         }
@@ -1244,6 +1235,9 @@ impl HyperDAG {
         let initial_validator_placeholder = DEV_ADDRESS.to_string();
         let placeholder_key = vec![0u8; 32];
         let current_difficulty_val = *self.difficulty.read().await;
+
+        let mut tips_guard = self.tips.write().await;
+        let mut blocks_guard = self.blocks.write().await;
 
         for chain_id_to_split in chains_to_split {
             if *num_chains_guard == u32::MAX {
@@ -1289,10 +1283,6 @@ impl HyperDAG {
         Ok(())
     }
 
-    /// **FIX FOR COMPILATION ERROR E0308**
-    /// This function now correctly creates a `saga::GovernanceProposal` and inserts it
-    /// into the SAGA governance state, resolving the type mismatch. The proposal's
-    /// `proposal_type` is now correctly constructed using the `saga::ProposalType` enum.
     #[instrument(skip(self, proposer_address, rule_name, new_value))]
     pub async fn propose_governance(
         &self,
@@ -1491,7 +1481,7 @@ impl HyperDAG {
             warn!("Failed to finalize blocks during maintenance: {e}");
         }
 
-        // Perform dynamic sharding as part of periodic maintenance.
+        // HANG FIX: Perform dynamic sharding as part of periodic maintenance.
         if let Err(e) = self.dynamic_sharding().await {
             warn!("Failed to run dynamic sharding during maintenance: {e}");
         }

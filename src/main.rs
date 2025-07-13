@@ -119,7 +119,6 @@ async fn start_node(config_path: PathBuf, wallet_path: PathBuf) -> Result<(), Cl
     info!("Loading configuration from '{}'.", config_path.display());
     let config = Config::load(&config_path.display().to_string())?;
 
-    // FIX: Await the now-asynchronous pre-boot sequence.
     x_phyrus::initialize_pre_boot_sequence(&config, &wallet_path).await?;
 
     let password = prompt_for_password(false)?;
