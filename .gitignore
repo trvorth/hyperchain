@@ -47,6 +47,7 @@ Thumbs.db
 # --- Logs & Databases ---
 *.log
 /hyperdag_db/
+/hyperdag_db_evolved/
 /node*/**/hyperdag_db/
 /peer_cache.json
 
