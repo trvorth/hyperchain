@@ -71,32 +71,19 @@ impl Consensus {
         utxos: &Arc<RwLock<HashMap<String, UTXO>>>,
     ) -> Result<(), ConsensusError> {
         // --- Rule 1: Structural & Cryptographic Integrity (Fastest Check) ---
-        // First, ensure the block is well-formed and its signature is valid. This is a cheap
-        // check that can quickly discard malformed or fraudulent blocks without further processing.
         self.validate_block_structure(block)?;
 
         // --- Rule 2: Proof-of-Stake (PoS) - The "Right to Participate" ---
-        // Verify that the block's creator (the validator) has sufficient stake locked in the
-        // network. This ensures that block producers have skin in the game. This is a mandatory
-        // prerequisite before any further checks are performed.
         self.validate_proof_of_stake(&block.validator, dag).await?;
 
         // --- Rule 3: Transaction Validity ---
-        // Iterate through all transactions (except the coinbase) and ensure they are valid
-        // (e.g., inputs exist, signatures are correct, funds are sufficient). This is the
-        // ledger integrity check.
         let utxos_guard = utxos.read().await;
-        for tx in block.transactions.iter().skip(1) {
-            // Skip coinbase
+        for tx in block.transactions.iter().skip(1) { // Skip coinbase
             tx.verify(dag, &utxos_guard).await?;
         }
         drop(utxos_guard);
 
         // --- Rule 4: Proof-of-Work (PoW) with Proof-of-Sentiency (PoSe) Adjustment ---
-        // The final and most computationally intensive check. Verify that the block's hash
-        // meets the difficulty target. This target is NOT static; it is dynamically adjusted
-        // by SAGA based on the miner's reputation (SCS). This is the core of PoSe, making
-        // PoW adaptive and intelligent without replacing it.
         self.validate_proof_of_work(block).await?;
 
         debug!("All consensus checks passed for block {}", block.id);
@@ -116,7 +103,6 @@ impl Consensus {
             ));
         }
 
-        // Verify the block's own internal signature.
         if !block.verify_signature().map_err(|e| {
             warn!("Block signature verification failed: {}", e);
             ConsensusError::InvalidBlockStructure("Block signature verification failed".to_string())
@@ -126,7 +112,6 @@ impl Consensus {
             ));
         }
 
-        // Verify the integrity of the transaction list against the Merkle root.
         let expected_merkle_root = HyperBlock::compute_merkle_root(&block.transactions)
             .map_err(|e| ConsensusError::InvalidBlockStructure(e.to_string()))?;
         if block.merkle_root != expected_merkle_root {
@@ -134,33 +119,31 @@ impl Consensus {
                 "Merkle root mismatch".to_string(),
             ));
         }
-
-        // Verify coinbase transaction structure.
+        
         let coinbase = &block.transactions[0];
         if !coinbase.inputs.is_empty() {
-            return Err(ConsensusError::InvalidBlockStructure(
+             return Err(ConsensusError::InvalidBlockStructure(
                 "First transaction in a block must be a coinbase (have no inputs)".to_string(),
             ));
         }
         if coinbase.outputs.len() < 2 {
-            return Err(ConsensusError::InvalidBlockStructure(
+             return Err(ConsensusError::InvalidBlockStructure(
                 "Coinbase transaction must have at least two outputs (miner reward and dev fee)"
                     .to_string(),
             ));
         }
 
+
         Ok(())
     }
 
     /// Proof-of-Stake (PoS) check: Verifies the validator meets the minimum stake requirement.
-    /// This is the gatekeeper function for consensus participation.
     async fn validate_proof_of_stake(
         &self,
         validator_address: &str,
         dag: &HyperDAG,
     ) -> Result<(), ConsensusError> {
         let rules = self.saga.economy.epoch_rules.read().await;
-        // The minimum stake is a dynamic rule controlled by SAGA governance.
         let min_stake = rules
             .get("min_validator_stake")
             .map_or(1000.0, |r| r.value) as u64;
@@ -182,8 +165,6 @@ impl Consensus {
         // PoSe: Get the specific difficulty required for *this* miner from SAGA.
         let effective_difficulty = self.get_effective_difficulty(&block.miner).await;
 
-        // The block must explicitly claim the difficulty it was trying to solve. This prevents
-        // miners from solving for an easier difficulty and claiming a harder one.
         if block.difficulty != effective_difficulty {
             return Err(ConsensusError::ProofOfWorkFailed(format!(
                 "Block difficulty mismatch. Claimed: {}, Required by PoSe: {}",
@@ -191,14 +172,12 @@ impl Consensus {
             )));
         }
 
-        // Calculate the hash target from the SAGA-provided difficulty.
         let target_hash =
             crate::miner::Miner::calculate_target_from_difficulty(effective_difficulty);
         let block_pow_hash = hex::decode(block.hash()).map_err(|_| {
             ConsensusError::StateError("Failed to decode block PoW hash".to_string())
         })?;
 
-        // The core PoW check. The block's hash must be less than or equal to the target.
         if !crate::miner::Miner::hash_meets_target(&block_pow_hash, &target_hash) {
             return Err(ConsensusError::ProofOfWorkFailed(
                 "Block hash does not meet the required PoSe difficulty target.".to_string(),
@@ -214,8 +193,6 @@ impl Consensus {
 
     /// **Proof-of-Sentiency (PoSe) Core Logic**
     /// Calculates the effective PoW difficulty for a given miner based on their Saga Credit Score (SCS).
-    /// This is the heart of PoSe: reputable miners have an easier time, making the network
-    /// more efficient, while disreputable miners must expend more energy, securing the network.
     pub async fn get_effective_difficulty(&self, miner_address: &str) -> u64 {
         let rules = self.saga.economy.epoch_rules.read().await;
         let base_difficulty = rules
@@ -238,8 +215,7 @@ impl Consensus {
         let difficulty_modifier = 1.0 - (scs - 0.5);
         let effective_difficulty = (base_difficulty as f64 * difficulty_modifier).round() as u64;
 
-        // Clamp the difficulty to a sane range (e.g., 50% to 200% of base) to prevent extreme values
-        // that could either halt the chain or make it too easy to mine.
+        // Clamp the difficulty to a sane range to prevent extreme values.
         effective_difficulty.clamp(
             base_difficulty.saturating_div(2),
             base_difficulty.saturating_mul(2),

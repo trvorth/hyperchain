@@ -1,30 +1,12 @@
 //! --- SAGA: Sentient Autonomous Governance Algorithm ---
-//! v2.9.0 - Adaptive Cognitive Load & Council Cooldown
-//! This version introduces a "Cognitive Load" metric for the SAGA council. The AI now
-//! monitors its own impact on its human overseers and will enter a cooldown period
-//! if its autonomous actions become too frequent, preventing governance fatigue.
+//! v3.0.0 - Eco-Sentiency & PoCO Integration
+//! This version fully integrates the Proof-of-Carbon-Offset (PoCO) system,
+//! making environmental contributions a core factor in validator reputation and rewards.
+//! AI models are now more sophisticated, with persistent storage and simulated training cycles.
 
 // [!!] BUILD NOTE: The 'ai' feature requires the `tch` crate and a `libtorch` installation.
-// If you encounter a build error, please follow these steps:
-//
-// 1. Add `tch` to your `Cargo.toml`:
-//    [dependencies]
-//    tch = { version = "0.14.0", optional = true }
-//
-//    [features]
-//    ai = ["dep:tch"]
-//
-// 2. Install `libtorch`. The easiest way is often via a Python environment:
-//    - Ensure you have Python and pip installed.
-//    - `pip install torch`
-//    - Set the following environment variable before building:
-//      `export LIBTORCH_USE_PYTORCH=1`
-//
-//    Alternatively, download `libtorch` manually from the PyTorch website and set
-//    the `LIBTORCH` environment variable to the path of the unzipped folder.
-//    Example: `export LIBTORCH=/path/to/libtorch`
+// See previous build notes for setup instructions if you encounter errors.
 
-// SAGA integrates with the ΩMEGA protocol for a unified security posture.
 use crate::hyperdag::{HyperBlock, HyperDAG, MAX_TRANSACTIONS_PER_BLOCK};
 use crate::omega;
 use crate::transaction::Transaction;
@@ -38,7 +20,6 @@ use tokio::sync::RwLock;
 use tracing::{debug, error, info, instrument, warn};
 use uuid::Uuid;
 
-// When the 'ai' feature is enabled, we bring in the ML libraries.
 #[cfg(feature = "ai")]
 use {
     std::path::PathBuf,
@@ -54,10 +35,9 @@ const BEHAVIOR_MODEL_FILENAME: &str = "behavior_net.ot";
 const CONGESTION_MODEL_FILENAME: &str = "congestion_lstm.ot";
 #[cfg(feature = "ai")]
 const TRAINING_DATA_CAPACITY: usize = 10000;
-const RETRAIN_INTERVAL_EPOCHS: u64 = 100; // Retrain models every 100 epochs
-const TEMPORAL_GRACE_PERIOD_SECS: u64 = 120; // Grace period for block timestamps.
+const RETRAIN_INTERVAL_EPOCHS: u64 = 100;
+const TEMPORAL_GRACE_PERIOD_SECS: u64 = 120;
 
-// --- Error Handling ---
 #[derive(Error, Debug, Clone)]
 pub enum SagaError {
     #[error("Rule not found in SAGA's current epoch state: {0}")]
@@ -90,20 +70,17 @@ pub enum SagaError {
     InvalidCredential(String),
 }
 
-// --- Core SAGA Data Structures ---
-
 /// Represents a verifiable claim of a carbon offset.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CarbonOffsetCredential {
-    pub id: String,                 // Unique ID of the credential (e.g., from Verra or Gold Standard)
-    pub issuer_id: String,          // ID of the trusted carbon credit issuer
-    pub beneficiary_node: String,   // The node claiming the offset
-    pub tonnes_co2_sequestered: f64, // Amount of CO2 offset
-    pub project_id: String,         // Identifier for the specific carbon project
-    pub vintage_year: u32,          // The year the offset was generated
-    pub verification_signature: String, // Signature from the issuer
-    // EVOLVED: Add additionality proof for more robust verification
-    pub additionality_proof: String, // A hash or statement proving the project's additionality
+    pub id: String,
+    pub issuer_id: String,
+    pub beneficiary_node: String,
+    pub tonnes_co2_sequestered: f64,
+    pub project_id: String,
+    pub vintage_year: u32,
+    pub verification_signature: String,
+    pub additionality_proof: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
@@ -113,7 +90,7 @@ pub struct TransactionMetadata {
     #[serde(default)]
     pub correlated_tx: Option<String>,
     #[serde(default)]
-    pub additional_data: HashMap<String, String>, // e.g., for contract calls, `{"contract_id": "xyz", "function": "transfer", "params": "[1,2,3]"}`
+    pub additional_data: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -153,9 +130,6 @@ pub struct TrustScoreBreakdown {
     pub final_weighted_score: f64,
 }
 
-// --- SAGA Cognitive Analytics AI Models ---
-
-// --- Model 1: BehaviorNet (Feedforward Neural Network for Reputation) ---
 #[cfg(feature = "ai")]
 #[derive(Debug)]
 struct BehaviorNet {
@@ -165,11 +139,10 @@ struct BehaviorNet {
 
 #[cfg(feature = "ai")]
 impl BehaviorNet {
-    // EVOLVED: Added one more input feature for environmental contribution.
     fn new(vs_path: &mut nn::VarStore) -> Self {
         let p = &vs_path.root();
         let seq = nn::seq()
-            .add(nn::linear(p / "layer1", 8, 24, Default::default())) // 8 inputs now
+            .add(nn::linear(p / "layer1", 8, 24, Default::default()))
             .add_fn(|xs| xs.relu())
             .add(nn::linear(p / "layer2", 24, 24, Default::default()))
             .add_fn(|xs| xs.relu())
@@ -186,7 +159,6 @@ impl BehaviorNet {
     }
 }
 
-// --- Model 2: CongestionPredictorLSTM (Recurrent Neural Network for Forecasting) ---
 #[cfg(feature = "ai")]
 #[derive(Debug)]
 struct CongestionPredictorLSTM {
@@ -234,55 +206,45 @@ impl CongestionPredictorLSTM {
     }
 }
 
-// EVOLVED: The heuristic model is now more advanced, simulating energy consumption units (ECUs).
+/// A heuristic model to estimate the CO2 impact of a transaction.
+/// This simulates the energy cost based on data size and computational work.
 #[derive(Debug)]
 pub struct CarbonImpactPredictor {}
 
 impl CarbonImpactPredictor {
-    /// A more advanced model to estimate the CO2 impact of a transaction.
-    /// This now considers transaction size and simulated computational work.
     pub fn predict_co2_per_tx(&self, tx: &Transaction, network_congestion: f64) -> f64 {
-        const GRAMS_CO2_PER_ECU: f64 = 0.005; // Grams of CO2 per "Energy Consumption Unit".
+        const GRAMS_CO2_PER_ECU: f64 = 0.005;
         const ECU_PER_BYTE: f64 = 0.1;
         const ECU_BASE_TRANSFER: f64 = 10.0;
-        const ECU_PER_CONTRACT_OPCODE: f64 = 0.5; // Simulated ECU per opcode in a contract.
+        const ECU_PER_CONTRACT_OPCODE: f64 = 0.5;
         const ECU_CONTRACT_DEPLOYMENT_BASE: f64 = 500.0;
 
-        // 1. Calculate ECU from data size
         let tx_bytes = serde_json::to_vec(tx).unwrap_or_default().len() as f64;
         let mut total_ecu = tx_bytes * ECU_PER_BYTE;
 
-        // 2. Calculate ECU from computational work
         let intent = tx.metadata.get("intent").map(|s| s.as_str());
         match intent {
             Some("contract_deployment") => {
-                // Heuristic: deployment cost is base + size of contract code (if available)
                 let code_size = tx.metadata.get("contract_code_size").and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
                 total_ecu += ECU_CONTRACT_DEPLOYMENT_BASE + (code_size * ECU_PER_BYTE);
             }
             Some("contract_interaction") => {
-                // Heuristic: interaction cost is based on simulated opcodes
-                 let op_count = tx.metadata.get("opcode_count").and_then(|s| s.parse::<f64>().ok()).unwrap_or(20.0); // Default to 20 ops
+                 let op_count = tx.metadata.get("opcode_count").and_then(|s| s.parse::<f64>().ok()).unwrap_or(20.0);
                  total_ecu += op_count * ECU_PER_CONTRACT_OPCODE;
             }
             _ => {
-                // Simple transfer
                 total_ecu += ECU_BASE_TRANSFER;
             }
         };
 
-        // 3. Higher congestion means more network-wide work (e.g., gossip, validation), so higher impact per tx.
         let congestion_multiplier = 1.0 + (network_congestion * 0.75);
         let final_ecu = total_ecu * congestion_multiplier;
-
         final_ecu * GRAMS_CO2_PER_ECU
     }
 }
 
-// --- AI Training Data Structure ---
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelTrainingData {
-    // Features for BehaviorNet
     pub validity: f64,
     pub network_contribution: f64,
     pub historical_performance: f64,
@@ -290,11 +252,8 @@ pub struct ModelTrainingData {
     pub temporal_consistency: f64,
     pub cognitive_dissonance: f64,
     pub metadata_integrity: f64,
-    // EVOLVED: Add new feature for training data.
     pub environmental_contribution: f64,
-    // Label for BehaviorNet (e.g., 1.0 for good, 0.0 for bad, determined post-finalization)
     pub behavior_label: f64,
-    // Feature for CongestionPredictor
     pub congestion_metric: f64,
 }
 
@@ -335,7 +294,6 @@ impl CognitiveAnalyticsEngine {
 
         #[cfg(feature = "ai")]
         {
-            // Try to load models from disk on startup
             if let Err(e) = engine.load_models_from_disk() {
                 warn!(
                     "Could not load SAGA AI models from disk (this is normal on first run): {}",
@@ -389,7 +347,6 @@ impl CognitiveAnalyticsEngine {
             "metadata_integrity".to_string(),
             self.analyze_metadata_integrity(block).await,
         );
-        // EVOLVED: Add the new environmental factor to the scoring.
         factors.insert(
             "environmental_contribution".to_string(),
             self.analyze_environmental_contribution(block, dag).await,
@@ -399,7 +356,6 @@ impl CognitiveAnalyticsEngine {
             #[cfg(feature = "ai")]
             {
                 if let Some(model) = &self.behavior_model {
-                    // EVOLVED: Update feature keys and tensor shape for the new input.
                     let factor_keys = [
                         "validity",
                         "network_contribution",
@@ -417,14 +373,13 @@ impl CognitiveAnalyticsEngine {
                     let features_tensor =
                         Tensor::from_slice(&feature_vec)
                             .to_kind(Kind::Float)
-                            .view([1, 8]); // Shape is now 1x8
+                            .view([1, 8]);
 
                     let prediction_tensor = model.forward(&features_tensor);
                     let prediction_vec: Vec<f32> =
                         Vec::<f32>::try_from(prediction_tensor.softmax(1, Kind::Float))
                             .map_err(|e| SagaError::InferenceError(e.to_string()))?;
 
-                    // Score is probability of good (index 1) + half prob of neutral (index 2) - prob of bad (index 0)
                     let score = prediction_vec[1] * 1.0 + prediction_vec[2] * 0.5
                         - prediction_vec[0] * 1.0;
                     score.clamp(0.0, 1.0) as f64
@@ -434,7 +389,7 @@ impl CognitiveAnalyticsEngine {
             }
             #[cfg(not(feature = "ai"))]
             {
-                0.5 // Default score if AI feature is disabled
+                0.5
             }
         };
         factors.insert(
@@ -448,10 +403,8 @@ impl CognitiveAnalyticsEngine {
             let base_weight_key = format!("trust_{factor_name}_weight");
             let mut weight = rules.get(&base_weight_key).map_or(0.1, |r| r.value);
 
-            // Dynamically adjust weights based on network state
             match network_state {
                 NetworkState::UnderAttack => {
-                    // Under attack, prioritize security and conformance signals
                     if factor_name == "temporal_consistency"
                         || factor_name == "cognitive_hazard"
                         || factor_name == "metadata_integrity"
@@ -460,7 +413,6 @@ impl CognitiveAnalyticsEngine {
                     }
                 }
                 NetworkState::Congested => {
-                    // When congested, prioritize efficient network usage
                     if factor_name == "network_contribution" {
                         weight *= 1.5;
                     }
@@ -477,14 +429,9 @@ impl CognitiveAnalyticsEngine {
         })
     }
 
-    // --- Factor Analysis Functions ---
-
-    /// Analyzes the block for its net carbon impact.
-    /// This is calculated as (total CO2 offset from credentials) - (estimated CO2 cost of the block's transactions).
     async fn analyze_environmental_contribution(&self, block: &HyperBlock, dag: &HyperDAG) -> f64 {
         let network_congestion = dag.get_average_tx_per_block().await / MAX_TRANSACTIONS_PER_BLOCK as f64;
 
-        // Calculate the block's carbon footprint using the now-active model.
         let block_footprint_grams: f64 = block
             .transactions
             .iter()
@@ -499,12 +446,6 @@ impl CognitiveAnalyticsEngine {
             .sum();
 
         let net_impact = total_offset_tonnes - block_footprint_tonnes;
-
-        // The score is based on the net impact. A positive net impact is good.
-        // A net-zero block gets a score of 0.5.
-        // This logistic function provides a score between 0 and 1.
-        // A net impact of +10 tonnes gives a score of ~0.99.
-        // A net impact of -10 tonnes gives a score of ~0.01.
         (1.0 / (1.0 + (-net_impact).exp())).clamp(0.0, 1.0)
     }
 
@@ -516,15 +457,12 @@ impl CognitiveAnalyticsEngine {
         if !coinbase.inputs.is_empty() || coinbase.outputs.is_empty() {
             return 0.2;
         }
-        // In a real implementation, we'd check transaction signatures, amounts, etc.
         1.0
     }
 
     async fn analyze_network_contribution(&self, block: &HyperBlock, dag: &HyperDAG) -> f64 {
         let avg_tx_per_block = dag.get_average_tx_per_block().await;
         let block_tx_count = block.transactions.len() as f64;
-        // Optimal contribution is slightly above average, but not spammy.
-        // We use a Gaussian function centered at a slight positive deviation.
         let deviation = (block_tx_count - (avg_tx_per_block * 1.1)) / avg_tx_per_block.max(1.0);
         (-deviation.powi(2)).exp()
     }
@@ -536,7 +474,6 @@ impl CognitiveAnalyticsEngine {
             .values()
             .filter(|b| b.miner == *miner_address)
             .count() as f64;
-        // Simple participation ratio. More advanced versions could look at orphan rates.
         (node_blocks / total_blocks).min(1.0)
     }
 
@@ -549,7 +486,6 @@ impl CognitiveAnalyticsEngine {
         let avg_fee = total_fee as f64 / tx_count as f64;
         let tx_ratio = tx_count as f64 / MAX_TRANSACTIONS_PER_BLOCK as f64;
 
-        // Penalize blocks that are almost full but have suspiciously low average fees, a sign of potential spam.
         if tx_ratio > 0.9 && avg_fee < 1.0 {
             return 0.2;
         }
@@ -588,7 +524,6 @@ impl CognitiveAnalyticsEngine {
     }
 
     fn analyze_cognitive_dissonance(&self, block: &HyperBlock) -> f64 {
-        // Look for contradictory economic signals within the same block.
         let high_fee_txs = block.transactions.iter().filter(|tx| tx.fee > 100).count();
         let zero_fee_txs = block
             .transactions
@@ -596,7 +531,6 @@ impl CognitiveAnalyticsEngine {
             .filter(|tx| tx.fee == 0 && !tx.inputs.is_empty())
             .count();
 
-        // Having both very high fee and many zero fee transactions is unusual.
         if high_fee_txs > 0 && zero_fee_txs > 5 {
             0.3
         } else {
@@ -608,22 +542,20 @@ impl CognitiveAnalyticsEngine {
         let tx_count = block.transactions.len().max(1) as f64;
         let mut suspicious_tx_count = 0.0;
 
-        for tx in block.transactions.iter().skip(1) { // Skip coinbase
-            // Check for missing or vague origin component
+        for tx in block.transactions.iter().skip(1) {
             if let Some(origin) = tx.metadata.get("origin_component") {
                 if origin.is_empty() || origin == "unknown" {
                     suspicious_tx_count += 0.5;
                 }
             } else {
-                suspicious_tx_count += 0.5; // Missing origin is suspicious
+                suspicious_tx_count += 0.5;
             }
 
             let intent = tx.metadata.get("intent").map(|s| s.as_str());
             if intent.is_none() || intent == Some("") {
-                suspicious_tx_count += 1.0; // Missing intent is highly suspicious
+                suspicious_tx_count += 1.0;
             }
 
-            // Check for unusually high entropy in intent string (potential obfuscation)
             if let Some(intent_str) = intent {
                 if Self::calculate_shannon_entropy(intent_str) > 3.5 {
                     suspicious_tx_count += 0.5;
@@ -650,31 +582,26 @@ impl CognitiveAnalyticsEngine {
             .sum()
     }
 
-    // --- AI Model Training & Persistence ---
     #[cfg(feature = "ai")]
     pub async fn collect_training_data_from_block(&mut self, block: &HyperBlock, dag: &HyperDAG) {
         if self.training_data.len() >= TRAINING_DATA_CAPACITY {
             self.training_data.pop_front();
         }
-        // Note: Using default rules here for data collection. Labeling is heuristic.
         let breakdown = self
             .score_node_behavior(block, dag, &HashMap::new(), NetworkState::Nominal)
             .await
             .unwrap_or_default();
         let congestion_metric = self.analyze_network_contribution(block, dag).await;
         
-        // EVOLVED: More advanced labeling. A block is "bad" (0.0) if it was part of a fork (orphaned),
-        // "good" (1.0) if it's on the main chain with a high score, and "neutral" (0.5) otherwise.
-        // This check simulates looking back to see if a block was discarded from the canonical chain.
         let is_orphaned = !dag.tips.read().await.values().any(|tips| tips.contains(&block.id)) 
             && dag.blocks.read().await.len() > 50;
 
         let behavior_label = if is_orphaned {
-            0.0 // Bad
+            0.0
         } else if breakdown.final_weighted_score > 0.7 {
-            1.0 // Good
+            1.0
         } else {
-            0.5 // Neutral
+            0.5
         };
         
         let data_point = ModelTrainingData {
@@ -731,7 +658,6 @@ impl CognitiveAnalyticsEngine {
             return Ok(());
         }
 
-        // --- BehaviorNet Training ---
         if let Some(model) = &mut self.behavior_model {
             let features: Vec<f32> = self
                 .training_data
@@ -750,14 +676,13 @@ impl CognitiveAnalyticsEngine {
                 })
                 .collect();
             
-            // Convert labels to one-hot encoding for cross-entropy loss with 3 classes (Bad, Good, Neutral)
             let labels: Vec<i64> = self
                 .training_data
                 .iter()
                 .map(|d| if d.behavior_label == 1.0 { 1 } else if d.behavior_label == 0.0 { 0 } else { 2 })
                 .collect();
 
-            let feature_tensor = Tensor::of_slice(&features).view([-1, 8]); // Shape is now Nx8
+            let feature_tensor = Tensor::of_slice(&features).view([-1, 8]);
             let label_tensor = Tensor::of_slice(&labels);
 
             let mut opt = nn::Adam::default().build(&model.vs, 1e-4).unwrap();
@@ -779,7 +704,6 @@ impl CognitiveAnalyticsEngine {
             info!("SAGA: BehaviorNet model training simulation complete.");
         }
 
-        // --- CongestionPredictorLSTM Training (simulated) ---
         info!("SAGA: CongestionPredictorLSTM training is conceptually similar and simulated as complete.");
         info!("SAGA: CarbonImpactPredictor does not require training (heuristic model).");
 
@@ -835,7 +759,6 @@ impl CognitiveAnalyticsEngine {
     }
 }
 
-// --- Predictive Economic Model ---
 #[derive(Debug, Clone, Default)]
 pub struct PredictiveEconomicModel;
 
@@ -843,7 +766,6 @@ impl PredictiveEconomicModel {
     pub fn new() -> Self {
         Self {}
     }
-    // EVOLVED: Add EnvironmentalMetrics to the calculation for a "green premium".
     pub async fn predictive_market_premium(
         &self,
         dag: &HyperDAG,
@@ -854,7 +776,6 @@ impl PredictiveEconomicModel {
         let fee_velocity: f64 = {
             let blocks_reader = dag.blocks.read().await;
 
-            // FIX: HashMap::values() doesn't support .rev(). We must collect, sort, and then take.
             let mut recent_blocks: Vec<_> = blocks_reader.values().collect();
             recent_blocks.sort_by_key(|b| b.timestamp);
             let recent_blocks_iter = recent_blocks.iter().rev().take(100);
@@ -870,20 +791,18 @@ impl PredictiveEconomicModel {
             }
         };
 
-        // Green premium calculation: a higher network green score adds a premium.
-        let green_score = metrics.network_green_score; // Score from 0.0 to 1.0
-        let green_premium = 1.0 + (green_score * 0.1); // Up to a 10% premium for a fully green network
+        let green_score = metrics.network_green_score;
+        let green_premium = 1.0 + (green_score * 0.1);
 
         let base_premium = 1.0;
         let demand_factor = (avg_tx_per_block / MAX_TRANSACTIONS_PER_BLOCK as f64)
             * (1.0 + (fee_velocity / 100.0).min(1.0));
         let security_factor = (1.0 - (10.0 / validator_count).min(1.0)).max(0.5);
         let premium = base_premium + demand_factor * security_factor;
-        (premium * green_premium).clamp(0.8, 2.0) // Clamp with a higher ceiling due to green premium
+        (premium * green_premium).clamp(0.8, 2.0)
     }
 }
 
-// --- Saga Guidance System (Saga Assistant) ---
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum QueryIntent {
     GetInfo,
@@ -899,9 +818,8 @@ struct AnalyzedQuery {
 #[derive(Debug, Clone)]
 pub struct SagaGuidanceSystem {
     knowledge_base: HashMap<String, String>,
-    // FIX: Add quotes around "ai"
     #[cfg(feature = "ai")]
-    topic_embeddings: HashMap<String, Vec<f32>>, // Simulated embeddings for advanced NLU
+    topic_embeddings: HashMap<String, Vec<f32>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -927,7 +845,6 @@ impl Default for SagaGuidanceSystem {
 impl SagaGuidanceSystem {
     pub fn new() -> Self {
         let mut knowledge_base = HashMap::new();
-        // EVOLVED: Expanded knowledge base entries for greater detail and clarity.
         knowledge_base.insert("setup".to_string(), "To get started with Hyperchain, follow these steps:\n1. **Download:** Get the latest `hyperchain` binary for your OS from the official repository.\n2. **Configuration:** Run `./hyperchain --init` in your terminal. This will create a default `config.toml` and a `wallet.key` file in your current directory.\n3. **Review Config:** Open `config.toml` to review settings. To connect to the network, add trusted peer multiaddresses to the `peers` array. Example: `peers = [\"/ip4/192.168.1.10/tcp/8008/p2p/12D3Koo...\"].\n4. **First Run:** Start the node with `./hyperchain`. It will automatically connect to peers if specified. If no peers are listed, it will run in a local, single-node mode, which is great for testing.".to_string());
         knowledge_base.insert("staking".to_string(), "Staking is the process of locking up HCN tokens to act as a validator. Validators are the backbone of the network, responsible for proposing new blocks, confirming transactions, and maintaining consensus.\n- **Become a Validator:** To become a validator, you must stake at least the minimum amount of HCN required by the current epoch rules (check the `/dag` endpoint for current parameters). Your node must be consistently online and performant to avoid penalties.\n- **Earn Rewards:** Proposing valid blocks earns rewards, which are dynamically calculated by SAGA. The reward amount is boosted by your Saga Credit Score (SCS), meaning more reputable validators earn more.\n- **Slashing Risk:** Malicious behavior (e.g., proposing invalid blocks, attempting a double-spend) or being consistently offline can cause your stake to be 'slashed', meaning a portion is forfeited as a penalty. This mechanism secures the network by disincentivizing bad actors.".to_string());
         knowledge_base.insert("send".to_string(), "To send tokens, you create and broadcast a transaction using your available funds, which are tracked as Unspent Transaction Outputs (UTXOs).\n1. **Check Balance/UTXOs:** Use the API endpoint `/utxos/{your_address}` to see a list of your UTXOs. The sum of these is your total balance.\n2. **Construct Transaction:** Create a transaction specifying which of your UTXOs will be used as inputs. Then, define the outputs: one for the recipient's address and the amount they should receive, and another 'change' output back to your own address with the remaining funds.\n3. **Sign & Submit:** Sign the complete transaction data with your private key (this is typically handled by your wallet software). Submit the signed transaction JSON to the `/transaction` API endpoint. The network will then pick it up for inclusion in a future block.".to_string());
@@ -947,7 +864,6 @@ impl SagaGuidanceSystem {
         knowledge_base.insert("carbon_credit".to_string(), "A carbon credit is a tradable certificate representing the removal of one tonne of CO2. In Hyperchain's PoCO system, a `CarbonOffsetCredential` is the on-chain representation of such a credit. To be accepted, it must come from a project on SAGA's trusted registry and pass verification. Including valid credentials in a block proves a miner has sponsored real-world climate action, and SAGA rewards them for this contribution with an improved SCS and higher potential earnings.".to_string());
         knowledge_base.insert("centralization_risk".to_string(), "Centralization is a key risk where a few miners control a majority of block production. SAGA's Security Monitor calculates this risk using the Herfindahl-Hirschman Index (HHI) on block producer statistics from the last epoch. A high HHI score indicates high market concentration and increases the 'centralization_risk'. If the risk is too high, SAGA may enter an 'UnderAttack' state and could autonomously propose changes to encourage more miners to participate.".to_string());
         
-        // FIX: Initialize the missing `topic_embeddings` field.
         Self { 
             knowledge_base,
             #[cfg(feature="ai")]
@@ -957,26 +873,22 @@ impl SagaGuidanceSystem {
 
     #[cfg(feature="ai")]
     fn generate_mock_embeddings() -> HashMap<String, Vec<f32>> {
-        // In a real system, these embeddings would be generated by a pre-trained language model.
-        // Here, we create simplistic, orthogonal vectors for clear topic separation in our simulation.
         HashMap::from([
             ("setup".to_string(), vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
             ("staking".to_string(), vec![0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
             ("send".to_string(), vec![0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0]),
             ("saga".to_string(), vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]),
             ("tokenomics".to_string(), vec![0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0]),
-            ("scs".to_string(), vec![0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0]), // Overlaps with staking and saga
+            ("scs".to_string(), vec![0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0]),
             ("security".to_string(), vec![0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
-            ("poco".to_string(), vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]), // Environmental topic
-            ("carbon_credit".to_string(), vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]), // Synonymous with poco
-            ("centralization_risk".to_string(), vec![0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.5]), // Security + Governance
+            ("poco".to_string(), vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]),
+            ("carbon_credit".to_string(), vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]),
+            ("centralization_risk".to_string(), vec![0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.5]),
         ])
     }
     
     #[cfg(feature="ai")]
     fn get_query_embedding(query: &str, topic_keywords: &HashMap<&str, Vec<&str>>) -> Vec<f32> {
-        // This simulates turning a query into a vector embedding.
-        // It's a simplified version of what a real transformer model does.
         let mut embedding = vec![0.0; 7];
         for (topic, keywords) in topic_keywords {
             if keywords.iter().any(|&k| query.contains(k)) {
@@ -992,7 +904,6 @@ impl SagaGuidanceSystem {
                 }
             }
         }
-        // Normalize the vector
         let norm = (embedding.iter().map(|v| v.powi(2)).sum::<f32>()).sqrt();
         if norm > 0.0 {
             embedding.iter_mut().for_each(|v| *v /= norm);
@@ -1055,7 +966,6 @@ impl SagaGuidanceSystem {
         ))
     }
 
-    /// EVOLVED: More advanced query analysis using simulated vector embeddings for semantic search.
     fn analyze_query_intent(&self, query: &str) -> Result<AnalyzedQuery, SagaError> {
         let q = query.to_lowercase();
         let intent = if q.contains("vs") || q.contains("difference") {
@@ -1072,13 +982,11 @@ impl SagaGuidanceSystem {
 
         #[cfg(not(feature="ai"))]
         {
-             // Fallback to simple keyword search if AI feature is disabled
             let topic_keywords: HashMap<&str, Vec<&str>> = HashMap::from([
                 ("scs", vec!["scs", "score", "reputation"]),
                 ("tokenomics", vec!["token", "hcn", "economy", "reward", "fee", "tokenomics"]),
                 ("staking", vec!["stake", "staking", "validator"]),
                 ("poco", vec!["poco", "offset", "environment", "carbon", "co2", "credit", "green"]),
-                 // ... add all other topics here
             ]);
             let mut best_topic = None;
             let mut max_score = 0;
@@ -1098,7 +1006,6 @@ impl SagaGuidanceSystem {
 
         #[cfg(feature="ai")]
         {
-            // FIX: Completed the HashMap as requested.
             let topic_keywords: HashMap<&str, Vec<&str>> = HashMap::from([
                 ("setup", vec!["setup", "start", "install", "config", "init"]),
                 ("staking", vec!["stake", "staking", "validator"]),
@@ -1120,19 +1027,16 @@ impl SagaGuidanceSystem {
                 ("centralization_risk", vec!["centralization", "hhi", "concentration"]),
             ]);
 
-            // 1. Get query embedding
             let query_embedding = Self::get_query_embedding(&q, &topic_keywords);
 
-            // 2. Calculate cosine similarity (dot product of normalized vectors)
             let mut scores: Vec<(String, f32)> = self.topic_embeddings.iter().map(|(topic, topic_emb)| {
                 let dot_product = query_embedding.iter().zip(topic_emb.iter()).map(|(a, b)| a * b).sum();
                 (topic.clone(), dot_product)
             }).collect();
             
-            // 3. Sort by score
             scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
             
-            if scores.is_empty() || scores[0].1 < 0.1 { // Confidence threshold
+            if scores.is_empty() || scores[0].1 < 0.1 {
                 return Err(SagaError::AmbiguousQuery(scores.iter().map(|(t, _)| t.clone()).take(3).collect()));
             }
 
@@ -1156,7 +1060,6 @@ impl SagaGuidanceSystem {
     }
 }
 
-// --- Security Monitor ---
 #[derive(Debug, Clone, Default)]
 pub struct SecurityMonitor;
 
@@ -1188,8 +1091,6 @@ impl SecurityMonitor {
             .sum::<f64>();
         let gini = (2.0 * sum_of_ranks) / (n * total_stake as f64) - (n + 1.0) / n;
 
-        // A very low Gini coefficient (close to 0) means stake is distributed very evenly, a potential sign of a Sybil attack.
-        // We return (1.0 - Gini) as the risk score.
         let sybil_risk = (1.0 - gini).max(0.0);
         debug!(
             "Sybil attack analysis complete. Gini: {:.4}, Risk Score: {:.4}",
@@ -1207,19 +1108,18 @@ impl SecurityMonitor {
             Err(_) => return 0.0,
         };
 
-        // Look at blocks from the last 10 minutes
         let recent_blocks: Vec<_> = blocks
             .values()
             .filter(|b| b.timestamp > now.saturating_sub(600))
             .collect();
 
         if recent_blocks.len() < 5 {
-            return 0.0; // Not enough recent data
+            return 0.0;
         }
 
         let total_txs: usize = recent_blocks
             .iter()
-            .map(|b| b.transactions.len().saturating_sub(1)) // Exclude coinbase
+            .map(|b| b.transactions.len().saturating_sub(1))
             .sum();
         if total_txs == 0 {
             return 0.0;
@@ -1231,7 +1131,6 @@ impl SecurityMonitor {
             .filter(|tx| tx.fee == 0)
             .count();
         
-        // The risk increases quadratically with the ratio of zero-fee transactions
         let zero_fee_ratio = zero_fee_txs as f64 / total_txs as f64;
         let risk = zero_fee_ratio.powi(2);
 
@@ -1242,12 +1141,10 @@ impl SecurityMonitor {
         risk
     }
 
-    /// EVOLVED: New security check for validator centralization. (Was previously a placeholder).
-    /// Analyzes the distribution of block production in the last epoch.
     #[instrument(skip(self, dag))]
     pub async fn check_for_centralization_risk(&self, dag: &HyperDAG, epoch_lookback: u64) -> f64 {
         let blocks = dag.blocks.read().await;
-        if blocks.len() < 50 { return 0.0; } // Not enough data for a meaningful analysis.
+        if blocks.len() < 50 { return 0.0; }
 
         let current_epoch = dag.current_epoch;
         
@@ -1258,31 +1155,27 @@ impl SecurityMonitor {
                 acc
             });
 
-        if recent_blocks_by_miner.len() < 3 { return 0.75; } // Very high risk if <3 miners are active.
+        if recent_blocks_by_miner.len() < 3 { return 0.75; }
 
         let total_produced = recent_blocks_by_miner.values().sum::<u64>() as f64;
         if total_produced == 0.0 { return 0.0; }
         
-        // Calculate the Herfindahl-Hirschman Index (HHI) for market concentration.
         let hhi = recent_blocks_by_miner.values()
             .map(|&count| {
                 let share = (count as f64 / total_produced) * 100.0;
                 share.powi(2)
             }).sum::<f64>();
 
-        // Normalize HHI to a 0.0-1.0 risk score.
         let risk = ((hhi - 1500.0).max(0.0) / (4000.0 - 1500.0)).clamp(0.0, 1.0);
 
         debug!("Centralization risk analysis complete. HHI: {:.2}, Risk Score: {:.4}", hhi, risk);
         risk
     }
 
-     /// EVOLVED: New security check for potential manipulation of the PoCO system.
     #[instrument(skip(self, dag))]
     pub async fn check_for_oracle_manipulation_risk(&self, dag: &HyperDAG) -> f64 {
         let blocks = dag.blocks.read().await;
 
-        // FIX: Correctly get recent blocks by sorting by timestamp, not using .rev()
         let mut recent_blocks_vec: Vec<_> = blocks.values().collect();
         recent_blocks_vec.sort_by_key(|b| b.timestamp);
         let recent_blocks = recent_blocks_vec.iter().rev().take(100);
@@ -1300,7 +1193,6 @@ impl SecurityMonitor {
         for (_miner, creds) in creds_by_miner.iter() {
             if creds.is_empty() { continue; }
 
-            // Check for over-reliance on a single project
             let mut project_counts = HashMap::<String, u32>::new();
             for cred in creds {
                 *project_counts.entry(cred.project_id.clone()).or_insert(0) += 1;
@@ -1317,7 +1209,6 @@ impl SecurityMonitor {
         (total_risk_score / num_miners_with_creds.max(1) as f64).clamp(0.0, 1.0)
     }
 
-    /// EVOLVED: New security check for time drift attacks.
     #[instrument(skip(self, dag))]
     pub async fn check_for_time_drift_attack(&self, dag: &HyperDAG) -> f64 {
         let blocks = dag.blocks.read().await;
@@ -1325,7 +1216,7 @@ impl SecurityMonitor {
         let mut recent_blocks: Vec<_> = blocks.values().collect();
         recent_blocks.sort_by_key(|b| b.timestamp);
         
-        let mut suspicious_timestamps = HashMap::<String, (u32, u32)>::new(); // miner -> (count, suspicious_count)
+        let mut suspicious_timestamps = HashMap::<String, (u32, u32)>::new();
         
         for block in recent_blocks.iter().rev().take(200) {
             let parent_max_ts = block.parents.iter()
@@ -1335,19 +1226,15 @@ impl SecurityMonitor {
             let (count, suspicious_count) = suspicious_timestamps.entry(block.miner.clone()).or_insert((0, 0));
             *count += 1;
 
-            // A timestamp is "suspicious" if it's within the first 2 seconds after its parent.
-            // This could indicate a miner trying to selfishly mine or rush blocks.
             if block.timestamp <= parent_max_ts + 2 {
                 *suspicious_count += 1;
             }
         }
         
-        // Calculate risk score for miners with enough recent blocks.
         let mut max_risk = 0.0;
         for (_miner, (count, suspicious_count)) in suspicious_timestamps {
-            if count > 10 { // Only consider miners with a decent number of blocks
+            if count > 10 {
                 let ratio = suspicious_count as f64 / count as f64;
-                // Risk increases sharply if more than 50% of blocks are suspicious
                 if ratio > max_risk {
                     max_risk = ratio;
                 }
@@ -1357,9 +1244,6 @@ impl SecurityMonitor {
         (max_risk.powi(2)).clamp(0.0, 1.0)
     }
 }
-
-
-// --- Governance, Reputation & Economic State Management ---
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub enum ProposalStatus {
@@ -1405,14 +1289,12 @@ pub struct GovernanceProposal {
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct CouncilMember {
     pub address: String,
-    // EVOLVED: Renamed from 'cognitive_fatigue' for clarity.
     pub cognitive_load: f64,
 }
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct SagaCouncil {
     pub members: Vec<CouncilMember>,
     pub last_updated_epoch: u64,
-    // EVOLVED: Add a cooldown tracker for autonomous governance.
     pub autonomous_governance_cooldown_until_epoch: u64,
 }
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Hash, Eq, PartialEq)]
@@ -1440,16 +1322,11 @@ pub struct GovernanceState {
     pub council: Arc<RwLock<SagaCouncil>>,
 }
 
-// EVOLVED: New state struct to manage environmental data.
 #[derive(Debug, Clone, Default)]
 pub struct EnvironmentalMetrics {
-    /// A score from 0.0 to 1.0 representing the network's overall greenness.
     pub network_green_score: f64,
-    /// Total tonnes of CO2 offset this epoch, adjusted for project quality.
     pub total_co2_offset_epoch: f64,
-    /// A mock registry of trusted carbon credit projects. In a real system, this would be managed by an oracle.
-    pub trusted_project_registry: HashMap<String, f64>, // project_id -> quality_multiplier
-    /// A pool of verified credentials received from the network for the current epoch.
+    pub trusted_project_registry: HashMap<String, f64>,
     pub verified_credentials: HashMap<String, CarbonOffsetCredential>,
 }
 
@@ -1461,11 +1338,8 @@ pub struct EconomicState {
     pub last_edict_epoch: Arc<RwLock<u64>>,
     pub proactive_insights: Arc<RwLock<Vec<SagaInsight>>>,
     pub congestion_history: Arc<RwLock<VecDeque<f64>>>,
-    // EVOLVED: Add environmental metrics to the economic state.
     pub environmental_metrics: Arc<RwLock<EnvironmentalMetrics>>,
 }
-
-// --- PalletSaga: The Main Struct ---
 
 #[derive(Debug, Clone)]
 pub struct PalletSaga {
@@ -1485,19 +1359,6 @@ impl Default for PalletSaga {
     }
 }
 impl PalletSaga {
-    /// **Architectural Note on Consensus:** PalletSaga implements a Proof-of-Sentiment (PoSe) layer.
-    /// It does **not** replace the underlying consensus mechanism (e.g., PoW or PoS) defined in `consensus.rs`.
-    /// Instead, it acts as an intelligent governance and economic layer that provides critical inputs to the core protocol.
-    ///
-    /// - **SAGA's Role:** It observes, learns, and generates adaptive parameters.
-    /// - **Consensus's Role:** It uses SAGA's outputs to execute the final consensus.
-    ///
-    /// - In a **PoW-based** chain, `consensus.rs` would use SAGA's `dynamic_difficulty` to adjust mining difficulty.
-    /// - In a **PoS-based** chain, `consensus.rs` would use SAGA's `SagaCreditScore` (SCS) to directly modify validator rewards,
-    ///   selection probability, and slashing penalties.
-    ///
-    /// This hybrid approach ensures the raw security of traditional consensus while adding a
-    /// sophisticated, adaptive layer of self-governance, economic stability, and behavioral incentives.
     pub fn new() -> Self {
         let mut rules = HashMap::new();
         rules.insert("base_difficulty".to_string(), EpochRule { value: 10.0, description: "The baseline PoW difficulty before PoSe adjustments.".to_string() });
@@ -1505,7 +1366,6 @@ impl PalletSaga {
         rules.insert("scs_trust_weight".to_string(), EpochRule { value: 0.55, description: "Weight of Cognitive Engine score in SCS.".to_string() });
         rules.insert("scs_karma_weight".to_string(), EpochRule { value: 0.2, description: "Weight of Karma in SCS.".to_string() });
         rules.insert("scs_stake_weight".to_string(), EpochRule { value: 0.2, description: "Weight of raw stake in SCS.".to_string() });
-        // EVOLVED: Add weight for the new environmental score.
         rules.insert("scs_environmental_weight".to_string(), EpochRule { value: 0.05, description: "Weight of environmental contribution in SCS.".to_string() });
         rules.insert("trust_validity_weight".to_string(), EpochRule { value: 0.20, description: "Weight of block validity in trust score.".to_string() });
         rules.insert("trust_network_contribution_weight".to_string(), EpochRule { value: 0.10, description: "Weight of network contribution in trust score.".to_string() });
@@ -1515,7 +1375,6 @@ impl PalletSaga {
         rules.insert("trust_cognitive_dissonance_weight".to_string(), EpochRule { value: 0.10, description: "Weight of cognitive dissonance in trust score.".to_string() });
         rules.insert("trust_metadata_integrity_weight".to_string(), EpochRule { value: 0.10, description: "Weight of transaction metadata integrity in trust score.".to_string() });
         rules.insert("trust_predicted_behavior_weight".to_string(), EpochRule { value: 0.10, description: "Weight of AI behavioral prediction in trust score.".to_string() });
-        // EVOLVED: Add weight for the new environmental factor.
         rules.insert("trust_environmental_contribution_weight".to_string(), EpochRule { value: 0.10, description: "Weight of PoCO score in trust score.".to_string() });
         rules.insert("base_reward".to_string(), EpochRule { value: 250.0, description: "Base HCN reward per block before modifiers.".to_string() });
         rules.insert("base_tx_fee".to_string(), EpochRule { value: 1.0, description: "Base transaction fee that can be dynamically adjusted.".to_string() });
@@ -1533,11 +1392,10 @@ impl PalletSaga {
         rules.insert("scs_smoothing_factor".to_string(), EpochRule { value: 0.1, description: "Smoothing factor for updating SCS (weight of the new score).".to_string() });
         
         let mut env_metrics = EnvironmentalMetrics::default();
-        // Populate with some mock trusted projects and their quality multipliers.
-        env_metrics.trusted_project_registry.insert("verra-p-981".to_string(), 1.0); // High quality reforestation
-        env_metrics.trusted_project_registry.insert("gold-standard-p-334".to_string(), 1.0); // High quality renewable energy
-        env_metrics.trusted_project_registry.insert("verra-p-201".to_string(), 0.8); // Good project, slightly older vintage
-        env_metrics.trusted_project_registry.insert("low-quality-p-001".to_string(), 0.5); // A project with lower additionality guarantees
+        env_metrics.trusted_project_registry.insert("verra-p-981".to_string(), 1.0);
+        env_metrics.trusted_project_registry.insert("gold-standard-p-334".to_string(), 1.0);
+        env_metrics.trusted_project_registry.insert("verra-p-201".to_string(), 0.8);
+        env_metrics.trusted_project_registry.insert("low-quality-p-001".to_string(), 0.5);
 
         Self {
             reputation: ReputationState {
@@ -1565,15 +1423,12 @@ impl PalletSaga {
         }
     }
 
-    /// EVOLVED: This function now performs more advanced, albeit simulated, checks
-    /// inspired by real-world carbon credit verification processes.
     pub async fn verify_and_store_credential(
         &self,
         cred: CarbonOffsetCredential,
     ) -> Result<(), SagaError> {
         let metrics = self.economy.environmental_metrics.read().await;
 
-        // 1. Basic sanity checks
         if cred.tonnes_co2_sequestered <= 0.0 {
             return Err(SagaError::InvalidCredential(
                 "CO2 amount must be positive.".to_string(),
@@ -1585,8 +1440,6 @@ impl PalletSaga {
             ));
         }
 
-        // 2. Simulated cryptographic signature verification.
-        // In a real system, this would involve fetching the issuer's public key from a trusted source.
         let expected_signature = format!("signed_by_{}", cred.issuer_id);
         if cred.verification_signature != expected_signature {
             return Err(SagaError::InvalidCredential(
@@ -1594,7 +1447,6 @@ impl PalletSaga {
             ));
         }
         
-        // 3. Check against a trusted project registry (simulated oracle).
         if !metrics.trusted_project_registry.contains_key(&cred.project_id) {
             return Err(SagaError::InvalidCredential(format!(
                 "Project ID '{}' is not in the trusted registry.",
@@ -1602,13 +1454,11 @@ impl PalletSaga {
             )));
         }
 
-        // 4. Heuristic check for 'vintage' - credits that are too old may be less valuable.
-        let current_year: u32 = 2025; // Assuming current year for simulation
+        let current_year: u32 = 2025;
         if current_year.saturating_sub(cred.vintage_year) > 5 {
-            warn!(cred_id=%cred.id, "Credential has an old vintage year ({}). Accepted, but may have lower impact.", cred.vintage_year);
+            warn!(cred_id=%cred.id, "Credential has an old vintage year ({}).", cred.vintage_year);
         }
 
-        // 5. Check for double-spending within the same epoch.
         let mut metrics_write = self.economy.environmental_metrics.write().await;
         if metrics_write.verified_credentials.contains_key(&cred.id) {
              return Err(SagaError::InvalidCredential(format!("Credential ID '{}' has already been submitted this epoch.", cred.id)));
@@ -1623,8 +1473,7 @@ impl PalletSaga {
 
         Ok(())
     }
-
-    /// Primary entry point for SAGA's evaluation of a newly received block.
+    
     #[instrument(skip(self, block, dag_arc))]
     pub async fn evaluate_block_with_saga(
         &self,
@@ -1633,10 +1482,8 @@ impl PalletSaga {
     ) -> Result<()> {
         info!(block_id = %block.id, miner = %block.miner, "SAGA: Starting evaluation of new block.");
         
-        // This function orchestrates the evaluation, scoring, and data collection for a block.
         self.evaluate_and_score_block(block, dag_arc).await?;
 
-        // After scoring, collect the results as training data for the AI models.
         #[cfg(feature = "ai")]
         {
             let dag = dag_arc.read().await;
@@ -1651,8 +1498,6 @@ impl PalletSaga {
         Ok(())
     }
     
-    /// This is the internal scoring logic, called by `evaluate_block_with_saga`.
-    /// It calculates the node's behavior score and updates their on-chain reputation (SCS).
     async fn evaluate_and_score_block(
         &self,
         block: &HyperBlock,
@@ -1677,7 +1522,6 @@ impl PalletSaga {
         Ok(())
     }
 
-    /// Calculates the dynamic block reward based on miner's SCS, network state, and economic models.
     pub async fn calculate_dynamic_reward(
         &self,
         block: &HyperBlock,
@@ -1694,7 +1538,7 @@ impl PalletSaga {
             .read()
             .await
             .get(&block.miner)
-            .map_or(0.5, |s| s.score); // Default to 0.5 if no score exists yet
+            .map_or(0.5, |s| s.score);
 
         let threat_level = omega::get_threat_level().await;
         let omega_penalty = match threat_level {
@@ -1704,14 +1548,12 @@ impl PalletSaga {
         }
         .max(0.0);
 
-        // EVOLVED: Pass environmental metrics to the premium calculation.
         let metrics = self.economy.environmental_metrics.read().await;
         let market_premium = self
             .economic_model
             .predictive_market_premium(&*dag_arc.read().await, &metrics)
             .await;
         
-        // Check for an active economic edict from SAGA.
         let edict_multiplier =
             if let Some(edict) = &*self.economy.active_edict.read().await {
                 if let EdictAction::Economic {
@@ -1728,46 +1570,25 @@ impl PalletSaga {
         
         let total_fees = block.transactions.iter().map(|tx| tx.fee).sum::<u64>();
 
-        // The final reward is a combination of the base reward, modified by performance (SCS),
-        // security (omega), market conditions, and autonomous edicts, plus transaction fees.
         let final_reward =
             (base_reward * scs * omega_penalty * market_premium * edict_multiplier) as u64
                 + total_fees;
         Ok(final_reward)
     }
     
-    /// Main state transition function called at the end of each epoch.
     #[instrument(skip(self, dag))]
     pub async fn process_epoch_evolution(&self, current_epoch: u64, dag: &HyperDAG) {
         info!("Processing SAGA epoch evolution for epoch {current_epoch}");
-        // 1. Assess the current state of the network.
         self.update_network_state(dag).await;
-        
-        // 2. Run predictive models based on new data.
         self.run_predictive_models(current_epoch, dag).await;
-        
-        // 3. Generate helpful tips or warnings for users.
         self.generate_proactive_insights(current_epoch, dag).await;
-        
-        // 4. Process governance proposals.
         self.tally_proposals(current_epoch).await;
-        
-        // 5. Apply long-term reputation decay.
         self.process_karma_decay(current_epoch).await;
-        
-        // 6. Update the high-karma council.
         self.update_council(current_epoch).await;
-        
-        // 7. Allow SAGA to issue autonomous commands (edicts).
         self.issue_new_edict(current_epoch, dag).await;
-        
-        // 8. Allow SAGA to propose its own governance changes.
         self.perform_autonomous_governance(current_epoch, dag).await;
-        
-        // 9. Process environmental metrics for the completed epoch.
         self.update_environmental_metrics(current_epoch).await;
 
-        // 10. Periodically retrain AI models.
         let mut last_retrain = self.last_retrain_epoch.write().await;
         if current_epoch > *last_retrain + RETRAIN_INTERVAL_EPOCHS {
             #[cfg(feature = "ai")]
@@ -1778,14 +1599,11 @@ impl PalletSaga {
         }
     }
 
-    // --- Epoch Evolution Sub-routines ---
-
     async fn update_network_state(&self, dag: &HyperDAG) {
         let avg_tx_per_block = dag.get_average_tx_per_block().await;
         let validator_count = dag.validators.read().await.len();
         let threat_level = omega::get_threat_level().await;
         
-        // Gather risk scores from the security monitor
         let sybil_risk = self.security_monitor.check_for_sybil_attack(dag).await;
         let spam_risk = self.security_monitor.check_transactional_anomalies(dag).await;
         let centralization_risk = self.security_monitor.check_for_centralization_risk(dag, 1).await;
@@ -1795,7 +1613,6 @@ impl PalletSaga {
         let mut state_writer = self.economy.network_state.write().await;
         let old_state = *state_writer;
 
-        // The network state is determined by the most severe condition present.
         *state_writer = if threat_level != omega::identity::ThreatLevel::Nominal 
             || sybil_risk > 0.8 
             || spam_risk > 0.75 
@@ -1821,19 +1638,16 @@ impl PalletSaga {
         }
     }
 
-    /// Runs predictive AI models based on the latest network data.
     async fn run_predictive_models(&self, current_epoch: u64, dag: &HyperDAG) {
-        // FIX: Silence unused variable warning. The variable is used, but only inside a conditional block.
         let _current_epoch = current_epoch;
 
-        // --- Congestion Prediction ---
         let avg_tx_per_block = dag.get_average_tx_per_block().await;
         let congestion_metric = avg_tx_per_block / MAX_TRANSACTIONS_PER_BLOCK as f64;
 
         let mut history = self.economy.congestion_history.write().await;
         history.push_back(congestion_metric.clamp(0.0, 1.0));
         if history.len() > 10 {
-            history.pop_front(); // Keep history size to the LSTM sequence length
+            history.pop_front();
         }
 
         #[cfg(feature = "ai")]
@@ -1845,7 +1659,6 @@ impl PalletSaga {
                     Ok(prediction) => {
                         info!(prediction, "SAGA LSTM predicted future congestion level.");
                         if prediction > 0.85 {
-                            // If high congestion is predicted, generate a proactive insight.
                             let mut insights = self.economy.proactive_insights.write().await;
                             if !insights.iter().any(|i| i.title.contains("Predicted Congestion")) {
                                 insights.push(SagaInsight {
@@ -1874,18 +1687,15 @@ impl PalletSaga {
         let rules = self.economy.epoch_rules.read().await;
         let dag_read = dag_arc.read().await;
         
-        // Get weights for each component of the SCS
         let trust_weight = rules.get("scs_trust_weight").map_or(0.55, |r| r.value);
         let karma_weight = rules.get("scs_karma_weight").map_or(0.2, |r| r.value);
         let stake_weight = rules.get("scs_stake_weight").map_or(0.2, |r| r.value);
         let env_weight = rules.get("scs_environmental_weight").map_or(0.05, |r| r.value);
 
-        // Get normalization factors
         let karma_divisor = rules.get("scs_karma_normalization_divisor").map_or(10000.0, |r| r.value);
         let stake_divisor = rules.get("scs_stake_normalization_divisor").map_or(50000.0, |r| r.value);
         let smoothing_factor = rules.get("scs_smoothing_factor").map_or(0.1, |r| r.value);
 
-        // Calculate normalized scores for karma and stake
         let karma_score = self
             .reputation
             .karma_ledgers
@@ -1900,10 +1710,8 @@ impl PalletSaga {
             .get(miner_address)
             .map_or(0.0, |&s| (s as f64 / stake_divisor).min(1.0));
         
-        // Get environmental score directly from the trust breakdown
         let env_score = trust_breakdown.factors.get("environmental_contribution").cloned().unwrap_or(0.5);
 
-        // Calculate the new raw score as a weighted average
         let new_raw_score = (trust_breakdown.final_weighted_score * trust_weight)
             + (karma_score * karma_weight)
             + (stake_score * stake_weight)
@@ -1912,18 +1720,16 @@ impl PalletSaga {
         let mut scores = self.reputation.credit_scores.write().await;
         let mut scs_entry = scores.entry(miner_address.to_string()).or_default().clone();
         
-        // Apply exponential moving average for smooth updates
         scs_entry.score = (scs_entry.score * (1.0 - smoothing_factor)) + (new_raw_score * smoothing_factor);
         scs_entry.last_updated = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|e| SagaError::TimeError(e.to_string()))?
             .as_secs();
         scs_entry.history.push((scs_entry.last_updated, scs_entry.score));
-        if scs_entry.history.len() > 200 { // Keep history bounded
+        if scs_entry.history.len() > 200 {
             scs_entry.history.remove(0);
         }
         
-        // Store the breakdown for transparency
         scs_entry.factors = trust_breakdown.factors.clone();
         scs_entry.factors.insert("karma_score".to_string(), karma_score);
         scs_entry.factors.insert("stake_score".to_string(), stake_score);
@@ -1935,7 +1741,7 @@ impl PalletSaga {
 
     async fn generate_proactive_insights(&self, current_epoch: u64, dag: &HyperDAG) {
         let mut insights = self.economy.proactive_insights.write().await;
-        insights.retain(|i| current_epoch < i.epoch + 5); // Insights expire after 5 epochs
+        insights.retain(|i| current_epoch < i.epoch + 5);
         let network_state = *self.economy.network_state.read().await;
 
         if network_state == NetworkState::Congested
@@ -1993,14 +1799,13 @@ impl PalletSaga {
                             rule.value = *new_value;
                         }
                     }
-                    // Award karma to the successful proposer and voters
                     self.award_karma(&proposal.proposer, KarmaSource::CreateSuccessfulProposal, karma_reward_proposer).await;
                     for voter in &proposal.voters {
                         if voter.voted_for {
                             self.award_karma(&voter.address, KarmaSource::VoteForPassedProposal, karma_reward_voter).await;
                         }
                     }
-                } else if current_epoch > proposal.creation_epoch + 10 { // 10-epoch voting period
+                } else if current_epoch > proposal.creation_epoch + 10 {
                     proposal.status = ProposalStatus::Rejected;
                     info!(proposal_id = %proposal.id, "Proposal expired and was rejected.");
                 }
@@ -2018,7 +1823,7 @@ impl PalletSaga {
 
     async fn process_karma_decay(&self, current_epoch: u64) {
         let decay_rate = self.economy.epoch_rules.read().await.get("karma_decay_rate").map_or(1.0, |r| r.value);
-        if decay_rate >= 1.0 { return; } // No decay
+        if decay_rate >= 1.0 { return; }
         
         let mut karma_ledgers = self.reputation.karma_ledgers.write().await;
         for (address, ledger) in karma_ledgers.iter_mut() {
@@ -2032,18 +1837,16 @@ impl PalletSaga {
 
     async fn update_council(&self, current_epoch: u64) {
         let mut council = self.governance.council.write().await;
-        if council.last_updated_epoch >= current_epoch { return; } // Already updated this epoch
+        if council.last_updated_epoch >= current_epoch { return; }
         
         let rules = self.economy.epoch_rules.read().await;
         let council_size = rules.get("council_size").map_or(5.0, |r| r.value) as usize;
         let fatigue_decay = rules.get("council_fatigue_decay").map_or(0.9, |r| r.value);
         
-        // Decay fatigue for existing members
         for member in &mut council.members {
             member.cognitive_load *= fatigue_decay;
         }
         
-        // Select new council based on top Karma holders
         let karma_ledgers = self.reputation.karma_ledgers.read().await;
         let mut karma_vec: Vec<_> = karma_ledgers.iter().collect();
         karma_vec.sort_by(|a, b| b.1.total_karma.cmp(&a.1.total_karma));
@@ -2065,10 +1868,9 @@ impl PalletSaga {
 
     async fn issue_new_edict(&self, current_epoch: u64, dag: &HyperDAG) {
         let mut last_edict_epoch = self.economy.last_edict_epoch.write().await;
-        if current_epoch < *last_edict_epoch + 10 { return; } // Cooldown period for edicts
+        if current_epoch < *last_edict_epoch + 10 { return; }
 
         let mut active_edict = self.economy.active_edict.write().await;
-        // Expire old edict if necessary
         if let Some(edict) = &*active_edict {
             if current_epoch >= edict.expiry_epoch {
                 info!("SAGA Edict #{} has expired.", edict.id);
@@ -2076,12 +1878,10 @@ impl PalletSaga {
             }
         }
 
-        // Issue new edict if none is active
         if active_edict.is_none() {
             let network_state = *self.economy.network_state.read().await;
             let new_edict = match network_state {
                 NetworkState::Congested => {
-                     // Check if congestion is a trend, not a blip
                     let history = self.economy.congestion_history.read().await;
                     let avg_congestion = history.iter().sum::<f64>() / history.len().max(1) as f64;
                     if avg_congestion > 0.8 {
@@ -2118,13 +1918,11 @@ impl PalletSaga {
     async fn perform_autonomous_governance(&self, current_epoch: u64, dag: &HyperDAG) {
         let mut council = self.governance.council.write().await;
 
-        // Check if SAGA is in a governance cooldown period.
         if current_epoch < council.autonomous_governance_cooldown_until_epoch {
             debug!("SAGA autonomous governance is in a cooldown period until epoch {}.", council.autonomous_governance_cooldown_until_epoch);
             return;
         }
 
-        // EVOLVED: Check the council's cognitive load.
         let avg_cognitive_load: f64 = council.members.iter().map(|m| m.cognitive_load).sum::<f64>() / council.members.len().max(1) as f64;
         if avg_cognitive_load > 0.8 {
             warn!(avg_load = avg_cognitive_load, "SAGA Council cognitive load is high. Initiating governance cooldown for 5 epochs.");
@@ -2132,25 +1930,20 @@ impl PalletSaga {
             return;
         }
 
-        // If not in cooldown, proceed with autonomous proposals.
-        // Each proposal now increases the council's cognitive load.
         if self.propose_validator_stake_adjustment(current_epoch, dag).await {
             council.members.iter_mut().for_each(|m| m.cognitive_load += 0.1);
         }
         if self.propose_governance_parameter_tuning(current_epoch).await {
-            council.members.iter_mut().for_each(|m| m.cognitive_load += 0.2); // This is a more complex change.
+            council.members.iter_mut().for_each(|m| m.cognitive_load += 0.2);
         }
         if self.propose_economic_parameter_tuning(current_epoch).await {
             council.members.iter_mut().for_each(|m| m.cognitive_load += 0.15);
         }
     }
     
-    // EVOLVED: New function to update environmental metrics each epoch.
     async fn update_environmental_metrics(&self, _current_epoch: u64) {
         let mut metrics = self.economy.environmental_metrics.write().await;
 
-        // Calculate total offsets for this epoch from the verified credentials.
-        // This includes applying a quality multiplier from the project registry.
         let total_offset: f64 = metrics
             .verified_credentials
             .values()
@@ -2161,8 +1954,6 @@ impl PalletSaga {
             .sum();
         metrics.total_co2_offset_epoch = total_offset;
 
-        // Update the network green score. This is a simple model where 1000 tonnes
-        // of quality-adjusted CO2 offset in an epoch results in a perfect score.
         let green_score = (total_offset / 1000.0).clamp(0.0, 1.0);
         metrics.network_green_score = green_score;
 
@@ -2172,11 +1963,8 @@ impl PalletSaga {
             "Updated environmental metrics for epoch."
         );
 
-        // Clear the credential pool for the next epoch to prevent reuse.
         metrics.verified_credentials.clear();
     }
-
-    // --- Autonomous Governance Sub-routines ---
 
     async fn propose_validator_stake_adjustment(&self, current_epoch: u64, dag: &HyperDAG) -> bool {
         let rules = self.economy.epoch_rules.read().await;

@@ -1,16 +1,14 @@
-// src/bin/saga_simulation.rs
-
 use anyhow::Result;
 use hyperchain::{
     hyperdag::HyperDAG,
     mempool::Mempool,
     saga::{CarbonOffsetCredential, PalletSaga},
-    // EVOLVED: Import the new dynamic fee function.
     transaction::{self, Input, Output, Transaction, TransactionConfig},
     wallet::Wallet,
 };
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
+use uuid::Uuid;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -42,7 +40,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("SAGA and HyperDAG initialized.");
 
     // 3. Mempool and UTXO Set
-    // FIX: Provide the required arguments for the Mempool constructor.
     let mempool_arc = Arc::new(RwLock::new(Mempool::new(3600, 10_000_000, 10_000)));
     let utxos_arc = Arc::new(RwLock::new(HashMap::new()));
 
@@ -67,7 +64,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     metadata.insert("origin_component".to_string(), "saga_simulation".to_string());
 
     let amount_to_send = 1_500_000; // An amount that falls into the 2% fee tier.
-    // EVOLVED: Use the new dynamic fee calculation.
     let fee = transaction::calculate_dynamic_fee(amount_to_send);
     println!("Sending {amount_to_send} with dynamically calculated fee of {fee}");
 
@@ -82,7 +78,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }],
         outputs: vec![
             Output {
-                address: receiver_address,
+                address: receiver_address.clone(),
                 amount: amount_to_send,
                 homomorphic_encrypted: hyperchain::hyperdag::HomomorphicEncrypted::new(amount_to_send, he_pub_key_material),
             },
@@ -100,8 +96,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sample_tx = Transaction::new(tx_config).await?;
     println!("Sample transaction created with ID: {}", sample_tx.id);
     
-    // FIX: Provide the required `utxos` and `dag` references to `add_transaction`.
-    // FIX: Add `.await` to handle the Future returned by the async function.
     {
         let dag_reader = dag_arc.read().await;
         let utxos_reader = utxos_arc.read().await;
@@ -125,13 +119,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Add a CarbonOffsetCredential to the candidate block
     candidate_block.carbon_credentials.push(CarbonOffsetCredential {
-        id: uuid::Uuid::new_v4().to_string(),
+        id: Uuid::new_v4().to_string(),
         issuer_id: "verra".to_string(),
         beneficiary_node: validator_address.clone(),
         tonnes_co2_sequestered: 5.5,
         project_id: "verra-p-981".to_string(), // Use a project ID from the trusted registry in saga.rs
         vintage_year: 2024,
-        verification_signature: "signed_by_verra",
+        // **FIX**: Convert &str to String to fix the type mismatch.
+        verification_signature: "signed_by_verra".to_string(),
         additionality_proof: "A mock proof statement or hash".to_string(),
     });
 

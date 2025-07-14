@@ -1,5 +1,3 @@
-// src/hyperdag.rs
-
 use crate::emission::Emission;
 use crate::mempool::Mempool;
 use crate::saga::{CarbonOffsetCredential, GovernanceProposal, PalletSaga, ProposalType};
@@ -115,8 +113,6 @@ pub struct SigningData<'a> {
     pub merkle_root: &'a str,
 }
 
-/// **FIX**: This struct was created to resolve the `too_many_arguments` clippy warning.
-/// It encapsulates all the necessary data to create a new `HyperBlock`.
 pub struct HyperBlockCreationData<'a> {
     pub chain_id: u32,
     pub parents: Vec<String>,
@@ -186,7 +182,6 @@ pub struct HomomorphicEncrypted {
 impl HomomorphicEncrypted {
     #[instrument]
     pub fn new(amount: u64, public_key_material: &[u8]) -> Self {
-        // This is a placeholder implementation. Real homomorphic encryption is far more complex.
         let mut hasher = Keccak256::new();
         hasher.update(amount.to_be_bytes());
         hasher.update(public_key_material);
@@ -197,7 +192,6 @@ impl HomomorphicEncrypted {
     }
     #[instrument]
     pub fn decrypt(&self, _private_key_material: &[u8]) -> Result<u64, HyperDAGError> {
-        // Placeholder decryption - cannot recover original value.
         if self.encrypted_amount == hex::encode(Keccak256::digest(0u64.to_be_bytes())) {
             Ok(0)
         } else {
@@ -208,7 +202,6 @@ impl HomomorphicEncrypted {
     }
     #[instrument]
     pub fn add(&self, other: &Self) -> Result<Self, HyperDAGError> {
-        // Placeholder addition.
         let mut hasher = Keccak256::new();
         hasher.update(self.encrypted_amount.as_bytes());
         hasher.update(other.encrypted_amount.as_bytes());
@@ -252,7 +245,6 @@ pub struct SmartContract {
 impl SmartContract {
     #[instrument]
     pub fn execute(&mut self, input: &str) -> Result<String, HyperDAGError> {
-        // This is a placeholder implementation for demonstration.
         if self.code.contains("echo") {
             self.storage
                 .insert("last_input".to_string(), input.to_string());
@@ -292,10 +284,8 @@ pub struct HyperBlock {
     pub lattice_signature: LatticeSignature,
     pub homomorphic_encrypted: Vec<HomomorphicEncrypted>,
     pub smart_contracts: Vec<SmartContract>,
-    // EVOLVED: Add a field for verifiable environmental credentials.
     #[serde(default)]
     pub carbon_credentials: Vec<CarbonOffsetCredential>,
-    // FIX: Add the epoch field required by SAGA's security monitor.
     pub epoch: u64,
 }
 
@@ -322,7 +312,6 @@ impl fmt::Display for HyperBlock {
         )?;
         writeln!(f, "║ 🧾 Transactions:   {}", self.transactions.len())?;
         writeln!(f, "🌳 Merkle Root:    {}", self.merkle_root)?;
-        // EVOLVED: Display carbon offset information in the block summary.
         let total_offset: f64 = self
             .carbon_credentials
             .iter()
@@ -349,8 +338,6 @@ impl fmt::Display for HyperBlock {
 }
 
 impl HyperBlock {
-    /// **FIX**: This function now accepts a single `HyperBlockCreationData` struct as an argument
-    /// to resolve the `too_many_arguments` clippy warning.
     #[instrument(skip(data))]
     pub fn new(data: HyperBlockCreationData) -> Result<Self, HyperDAGError> {
         let nonce = 0;
@@ -399,7 +386,6 @@ impl HyperBlock {
             homomorphic_encrypted: homomorphic_encrypted_data,
             smart_contracts: vec![],
             carbon_credentials: vec![],
-            // FIX: Initialize the epoch field.
             epoch: data.current_epoch,
         })
     }
@@ -509,7 +495,6 @@ pub struct HyperDAG {
     pub db: Arc<DB>,
     pub saga: Arc<PalletSaga>,
     self_arc: Weak<RwLock<HyperDAG>>,
-    // FIX: Add the current_epoch field required by SAGA.
     pub current_epoch: u64,
 }
 
@@ -526,7 +511,6 @@ impl HyperDAG {
         let db = task::spawn_blocking(|| {
             let mut opts = Options::default();
             opts.create_if_missing(true);
-            // HANG FIX: Corrected DB path to match the pre-boot integrity check.
             DB::open(&opts, "hyperdag_db_evolved")
         })
         .await?
@@ -605,7 +589,7 @@ impl HyperDAG {
         total_txs as f64 / blocks_guard.len() as f64
     }
 
-    /// **HANG FIX:** This function is now streamlined to perform only the critical,
+    /// **HANGING ISSUE FIX:** This function is now streamlined to perform only the critical,
     /// atomic actions required to add a block to the DAG. Heavier maintenance operations
     /// like `finalize_blocks` and `dynamic_sharding` have been removed to prevent
     /// deadlocks and are now handled by `run_periodic_maintenance`.
@@ -694,9 +678,6 @@ impl HyperDAG {
         self.emission
             .update_supply(block_for_db.reward)
             .map_err(HyperDAGError::EmissionError)?;
-
-        // HANG FIX: Removed calls to self.finalize_blocks() and self.dynamic_sharding().
-        // These are now handled by the periodic maintenance task to prevent deadlocks.
 
         BLOCKS_PROCESSED.inc();
         TRANSACTIONS_PROCESSED.inc_by(block_for_db.transactions.len() as u64);
@@ -1473,11 +1454,7 @@ impl HyperDAG {
         (chain_blocks_map, utxos_map_for_chain)
     }
 
-    /// **HANG FIX:** This function now handles all heavy, periodic maintenance tasks,
-    /// including difficulty adjustment, block finalization, and dynamic sharding.
-    /// By consolidating these tasks here and removing them from the `add_block` hot path,
-    /// we prevent deadlocks and ensure the node remains responsive.
-    pub async fn run_periodic_maintenance(&self) -> Result<(), HyperDAGError> {
+    pub async fn run_periodic_maintenance(&mut self) -> Result<(), HyperDAGError> {
         info!("Running periodic DAG maintenance...");
 
         // Adjust difficulty
@@ -1498,7 +1475,7 @@ impl HyperDAG {
             warn!("Failed to finalize blocks during maintenance: {e}");
         }
 
-        // HANG FIX: Perform dynamic sharding as part of periodic maintenance.
+        // Perform dynamic sharding as part of periodic maintenance.
         if let Err(e) = self.dynamic_sharding().await {
             warn!("Failed to run dynamic sharding during maintenance: {e}");
         }

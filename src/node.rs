@@ -291,7 +291,7 @@ impl Node {
                         }
                         P2PCommand::BroadcastTransaction(tx) => {
                             debug!("Command processor received transaction {}", tx.id);
-                            let mempool_writer = mempool_clone.write().await;
+                            let mut mempool_writer = mempool_clone.write().await;
                             let dag_reader = dag_clone.read().await;
                             let utxos_reader = utxos_clone.read().await;
                             if let Err(e) = mempool_writer
@@ -336,7 +336,9 @@ impl Node {
                             
                             // Step 3: Run maintenance after all blocks are added.
                             {
-                                let dag_writer = dag_clone.write().await;
+                                // **FIX**: `run_periodic_maintenance` requires a mutable borrow, so `dag_writer`
+                                // must be declared as mutable.
+                                let mut dag_writer = dag_clone.write().await;
                                 if let Err(e) = dag_writer.run_periodic_maintenance().await {
                                     warn!("Periodic maintenance failed after state sync: {}", e);
                                 }

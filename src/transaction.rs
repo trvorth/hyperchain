@@ -18,6 +18,13 @@ const MAX_TRANSACTIONS_PER_MINUTE: u64 = 1000;
 const MAX_METADATA_PAIRS: usize = 16;
 const MAX_METADATA_KEY_LEN: usize = 64;
 const MAX_METADATA_VALUE_LEN: usize = 256;
+// EVOLVED: Constants for the new dynamic fee model.
+const FEE_TIER1_THRESHOLD: u64 = 1_000_000;
+const FEE_TIER2_THRESHOLD: u64 = 100_000_000;
+const FEE_RATE_TIER1: f64 = 0.01; // 1%
+const FEE_RATE_TIER2: f64 = 0.02; // 2%
+const FEE_RATE_TIER3: f64 = 0.03; // 3%
+
 
 #[derive(Error, Debug)]
 pub enum TransactionError {
@@ -100,6 +107,20 @@ pub struct Transaction {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub metadata: HashMap<String, String>,
 }
+
+/// This function calculates the transaction fee based on the amount being sent,
+/// according to the specified tiered structure.
+pub fn calculate_dynamic_fee(amount: u64) -> u64 {
+    let rate = if amount < FEE_TIER1_THRESHOLD {
+        FEE_RATE_TIER1
+    } else if amount < FEE_TIER2_THRESHOLD {
+        FEE_RATE_TIER2
+    } else {
+        FEE_RATE_TIER3
+    };
+    (amount as f64 * rate).round() as u64
+}
+
 
 impl Transaction {
     #[instrument(skip(config))]
@@ -221,7 +242,9 @@ impl Transaction {
                 total_input_value += utxo.amount;
             }
             let total_output_value: u64 = self.outputs.iter().map(|o| o.amount).sum();
-            if total_input_value != total_output_value + self.fee { return Err(TransactionError::InsufficientFunds); }
+            // **BUG FIX**: The check should be for less than (<), not not-equal-to (!=).
+            // The total input must be greater than or equal to the total output plus the fee.
+            if total_input_value < total_output_value + self.fee { return Err(TransactionError::InsufficientFunds); }
         }
         Ok(())
     }
@@ -259,7 +282,6 @@ impl Zeroize for Transaction {
 }
 
 impl Drop for Transaction { fn drop(&mut self) { self.zeroize(); } }
-
 
 #[cfg(test)]
 mod tests {
