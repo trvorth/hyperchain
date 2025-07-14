@@ -1,8 +1,8 @@
 //! --- SAGA: Sentient Autonomous Governance Algorithm ---
-//! A pallet to manage a dynamic, AI-driven consensus and reputation system.
-//! v2.8.0 - Cross-File Sync & Evolved Security
-//! This version synchronizes with the corrected hyperdag.rs structs, fixing compilation.
-//! It also completes the AI Assistant's knowledge mapping and adds a new time-drift security monitor.
+//! v2.9.0 - Adaptive Cognitive Load & Council Cooldown
+//! This version introduces a "Cognitive Load" metric for the SAGA council. The AI now
+//! monitors its own impact on its human overseers and will enter a cooldown period
+//! if its autonomous actions become too frequent, preventing governance fatigue.
 
 // [!!] BUILD NOTE: The 'ai' feature requires the `tch` crate and a `libtorch` installation.
 // If you encounter a build error, please follow these steps:
@@ -1405,12 +1405,15 @@ pub struct GovernanceProposal {
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct CouncilMember {
     pub address: String,
-    pub cognitive_fatigue: f64,
+    // EVOLVED: Renamed from 'cognitive_fatigue' for clarity.
+    pub cognitive_load: f64,
 }
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct SagaCouncil {
     pub members: Vec<CouncilMember>,
     pub last_updated_epoch: u64,
+    // EVOLVED: Add a cooldown tracker for autonomous governance.
+    pub autonomous_governance_cooldown_until_epoch: u64,
 }
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Hash, Eq, PartialEq)]
 pub enum KarmaSource {
@@ -2037,7 +2040,7 @@ impl PalletSaga {
         
         // Decay fatigue for existing members
         for member in &mut council.members {
-            member.cognitive_fatigue *= fatigue_decay;
+            member.cognitive_load *= fatigue_decay;
         }
         
         // Select new council based on top Karma holders
@@ -2046,10 +2049,10 @@ impl PalletSaga {
         karma_vec.sort_by(|a, b| b.1.total_karma.cmp(&a.1.total_karma));
         
         let new_members: Vec<CouncilMember> = karma_vec.into_iter().take(council_size).map(|(address, _)| {
-            let existing_fatigue = council.members.iter().find(|m| m.address == *address).map_or(0.0, |m| m.cognitive_fatigue);
+            let existing_load = council.members.iter().find(|m| m.address == *address).map_or(0.0, |m| m.cognitive_load);
             CouncilMember {
                 address: address.clone(),
-                cognitive_fatigue: existing_fatigue,
+                cognitive_load: existing_load,
             }
         }).collect();
         
@@ -2113,9 +2116,33 @@ impl PalletSaga {
     }
 
     async fn perform_autonomous_governance(&self, current_epoch: u64, dag: &HyperDAG) {
-        self.propose_validator_stake_adjustment(current_epoch, dag).await;
-        self.propose_governance_parameter_tuning(current_epoch).await;
-        self.propose_economic_parameter_tuning(current_epoch).await;
+        let mut council = self.governance.council.write().await;
+
+        // Check if SAGA is in a governance cooldown period.
+        if current_epoch < council.autonomous_governance_cooldown_until_epoch {
+            debug!("SAGA autonomous governance is in a cooldown period until epoch {}.", council.autonomous_governance_cooldown_until_epoch);
+            return;
+        }
+
+        // EVOLVED: Check the council's cognitive load.
+        let avg_cognitive_load: f64 = council.members.iter().map(|m| m.cognitive_load).sum::<f64>() / council.members.len().max(1) as f64;
+        if avg_cognitive_load > 0.8 {
+            warn!(avg_load = avg_cognitive_load, "SAGA Council cognitive load is high. Initiating governance cooldown for 5 epochs.");
+            council.autonomous_governance_cooldown_until_epoch = current_epoch + 5;
+            return;
+        }
+
+        // If not in cooldown, proceed with autonomous proposals.
+        // Each proposal now increases the council's cognitive load.
+        if self.propose_validator_stake_adjustment(current_epoch, dag).await {
+            council.members.iter_mut().for_each(|m| m.cognitive_load += 0.1);
+        }
+        if self.propose_governance_parameter_tuning(current_epoch).await {
+            council.members.iter_mut().for_each(|m| m.cognitive_load += 0.2); // This is a more complex change.
+        }
+        if self.propose_economic_parameter_tuning(current_epoch).await {
+            council.members.iter_mut().for_each(|m| m.cognitive_load += 0.15);
+        }
     }
     
     // EVOLVED: New function to update environmental metrics each epoch.
@@ -2151,23 +2178,21 @@ impl PalletSaga {
 
     // --- Autonomous Governance Sub-routines ---
 
-    async fn propose_validator_stake_adjustment(&self, current_epoch: u64, dag: &HyperDAG) {
+    async fn propose_validator_stake_adjustment(&self, current_epoch: u64, dag: &HyperDAG) -> bool {
         let rules = self.economy.epoch_rules.read().await;
         let validator_count = dag.validators.read().await.len();
         let min_stake_rule = "min_validator_stake".to_string();
         let current_min_stake = rules.get(&min_stake_rule).map_or(1000.0, |r| r.value);
         
-        // If network is degraded due to low validator count, propose lowering the barrier to entry.
         if validator_count < 5 && *self.economy.network_state.read().await == NetworkState::Degraded {
             let mut proposals = self.governance.proposals.write().await;
-            // Check if a similar proposal already exists to avoid spamming.
             if !proposals.values().any(|p| p.status == ProposalStatus::Voting && matches!(&p.proposal_type, ProposalType::UpdateRule(name, _) if name == &min_stake_rule)) {
                 let new_stake_req = (current_min_stake * 0.9).round();
                 let proposal = GovernanceProposal {
                     id: format!("saga-proposal-{}", Uuid::new_v4()),
                     proposer: "SAGA_AUTONOMOUS_AGENT".to_string(),
                     proposal_type: ProposalType::UpdateRule(min_stake_rule, new_stake_req),
-                    votes_for: 1.0, // Pre-seeded with SAGA's own (symbolic) vote
+                    votes_for: 1.0, 
                     votes_against: 0.0,
                     status: ProposalStatus::Voting,
                     voters: vec![],
@@ -2176,19 +2201,21 @@ impl PalletSaga {
                 info!(proposal_id = %proposal.id, "SAGA is autonomously proposing to lower the minimum stake to {} to attract validators.", new_stake_req);
                 self.award_karma("SAGA_AUTONOMOUS_AGENT", KarmaSource::SagaAutonomousAction, 100).await;
                 proposals.insert(proposal.id.clone(), proposal);
+                return true;
             }
         }
+        false
     }
 
-    async fn propose_governance_parameter_tuning(&self, current_epoch: u64) {
-        if current_epoch % 20 != 0 { return; } // Analyze every 20 epochs.
+    async fn propose_governance_parameter_tuning(&self, current_epoch: u64) -> bool {
+        if current_epoch % 20 != 0 { return false; } 
 
         let proposals = self.governance.proposals.read().await;
         let recent_proposals: Vec<_> = proposals.values()
             .filter(|p| p.creation_epoch > current_epoch.saturating_sub(20) && p.proposer != "SAGA_AUTONOMOUS_AGENT")
             .collect();
 
-        if recent_proposals.len() < 2 { return; } // Not enough data.
+        if recent_proposals.len() < 2 { return false; }
 
         let rejected_count = recent_proposals.iter().filter(|p| p.status == ProposalStatus::Rejected).count();
         let rejection_rate = rejected_count as f64 / recent_proposals.len() as f64;
@@ -2197,11 +2224,10 @@ impl PalletSaga {
         let rules = self.economy.epoch_rules.read().await;
         let current_threshold = rules.get(&vote_threshold_rule).map_or(100.0, |r| r.value);
         
-        // If >75% of recent proposals failed, the threshold might be too high, stifling governance.
         if rejection_rate > 0.75 {
             let mut proposals_writer = self.governance.proposals.write().await;
             if !proposals_writer.values().any(|p| p.status == ProposalStatus::Voting && matches!(&p.proposal_type, ProposalType::UpdateRule(name, _) if name == &vote_threshold_rule)) {
-                let new_threshold = (current_threshold * 0.9).round(); // Propose a 10% reduction.
+                let new_threshold = (current_threshold * 0.9).round();
                 let proposal = GovernanceProposal {
                     id: format!("saga-proposal-{}", Uuid::new_v4()),
                     proposer: "SAGA_AUTONOMOUS_AGENT".to_string(),
@@ -2211,27 +2237,27 @@ impl PalletSaga {
                 info!(proposal_id = %proposal.id, "SAGA detected a high proposal rejection rate and is proposing to lower the vote threshold to {}.", new_threshold);
                 self.award_karma("SAGA_AUTONOMOUS_AGENT", KarmaSource::SagaAutonomousAction, 100).await;
                 proposals_writer.insert(proposal.id.clone(), proposal);
+                return true;
             }
         }
+        false
     }
 
-    async fn propose_economic_parameter_tuning(&self, current_epoch: u64) {
-        if current_epoch % 15 != 0 { return; } // Run every 15 epochs.
+    async fn propose_economic_parameter_tuning(&self, current_epoch: u64) -> bool {
+        if current_epoch % 15 != 0 { return false; }
         
         let fee_rule = "base_tx_fee".to_string();
         let rules = self.economy.epoch_rules.read().await;
         let current_base_fee = rules.get(&fee_rule).map_or(1.0, |r| r.value);
         let congestion_history = self.economy.congestion_history.read().await;
         
-        // Analyze congestion trend
-        if congestion_history.len() < 5 { return; }
+        if congestion_history.len() < 5 { return false; }
         let avg_congestion = congestion_history.iter().sum::<f64>() / congestion_history.len() as f64;
 
-        // If average congestion is sustainably high, propose a fee increase to manage demand.
         if avg_congestion > 0.75 {
             let mut proposals_writer = self.governance.proposals.write().await;
             if !proposals_writer.values().any(|p| p.status == ProposalStatus::Voting && matches!(&p.proposal_type, ProposalType::UpdateRule(name, _) if name == &fee_rule)) {
-                let new_fee = (current_base_fee * 1.25).round(); // Propose a 25% fee increase.
+                let new_fee = (current_base_fee * 1.25).round(); 
                 let proposal = GovernanceProposal {
                     id: format!("saga-proposal-{}", Uuid::new_v4()),
                     proposer: "SAGA_AUTONOMOUS_AGENT".to_string(),
@@ -2241,7 +2267,9 @@ impl PalletSaga {
                 info!(proposal_id = %proposal.id, "SAGA detected sustained network congestion and is proposing to increase the base transaction fee to {}.", new_fee);
                 self.award_karma("SAGA_AUTONOMOUS_AGENT", KarmaSource::SagaAutonomousAction, 100).await;
                 proposals_writer.insert(proposal.id.clone(), proposal);
+                return true;
             }
         }
+        false
     }
 }
