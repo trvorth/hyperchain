@@ -208,8 +208,8 @@ pub async fn reflect_on_action(action_hash: H256) -> bool {
 /// The danger threshold becomes lower as the system's threat level increases.
 fn is_action_dangerous_in_mirror_space(action_hash: &H256, identity: &DigitalIdentity) -> bool {
     let danger_threshold = match identity.threat_level {
-        ThreatLevel::Nominal => 4,   // Requires a very unusual hash to trigger
-        ThreatLevel::Guarded => 3,   // More sensitive
+        ThreatLevel::Nominal => 4,  // Requires a very unusual hash to trigger
+        ThreatLevel::Guarded => 3,  // More sensitive
         ThreatLevel::Elevated => 2, // Highly sensitive
     };
     count_leading_zeros(action_hash) > danger_threshold
@@ -221,7 +221,7 @@ fn is_action_dangerous_in_mirror_space(action_hash: &H256, identity: &DigitalIde
 fn is_wave_collapsing_logic(wave: &H256) -> bool {
     let complexity = wave.0.iter().map(|&byte| byte.count_ones()).sum::<u32>();
     // An arbitrary threshold. A wave with very few "1"s is considered low complexity.
-    complexity < 80 
+    complexity < 80
 }
 
 /// Public accessor to get the current system threat level.

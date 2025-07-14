@@ -8,7 +8,7 @@ pub mod miner;
 pub mod node;
 pub mod omega;
 pub mod p2p;
+pub mod saga;
 pub mod transaction;
 pub mod wallet;
 pub mod x_phyrus;
-pub mod saga;

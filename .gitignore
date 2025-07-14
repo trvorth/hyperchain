@@ -95,6 +95,7 @@ __pycache__/
 *.pyc
 
 # Node.js / Web
+/web
 /web/node_modules/
 /web/dist/
 /web/.env*

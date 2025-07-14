@@ -126,6 +126,7 @@ pub struct HyperBlockCreationData<'a> {
     pub miner: String,
     pub signing_key_material: &'a [u8],
     pub timestamp: u64,
+    pub current_epoch: u64,
 }
 
 #[derive(Debug)]
@@ -294,6 +295,8 @@ pub struct HyperBlock {
     // EVOLVED: Add a field for verifiable environmental credentials.
     #[serde(default)]
     pub carbon_credentials: Vec<CarbonOffsetCredential>,
+    // FIX: Add the epoch field required by SAGA's security monitor.
+    pub epoch: u64,
 }
 
 impl fmt::Display for HyperBlock {
@@ -395,8 +398,9 @@ impl HyperBlock {
             cross_chain_swaps: vec![],
             homomorphic_encrypted: homomorphic_encrypted_data,
             smart_contracts: vec![],
-            // EVOLVED: Initialize the new field.
             carbon_credentials: vec![],
+            // FIX: Initialize the epoch field.
+            epoch: data.current_epoch,
         })
     }
 
@@ -505,6 +509,8 @@ pub struct HyperDAG {
     pub db: Arc<DB>,
     pub saga: Arc<PalletSaga>,
     self_arc: Weak<RwLock<HyperDAG>>,
+    // FIX: Add the current_epoch field required by SAGA.
+    pub current_epoch: u64,
 }
 
 impl HyperDAG {
@@ -541,6 +547,7 @@ impl HyperDAG {
                 miner: initial_validator.to_string(),
                 signing_key_material: signing_key,
                 timestamp: genesis_timestamp,
+                current_epoch: 0,
             };
             let mut genesis_block = HyperBlock::new(genesis_creation_data)?;
             genesis_block.reward = 0;
@@ -578,6 +585,7 @@ impl HyperDAG {
             db: Arc::new(db),
             saga,
             self_arc: Weak::new(),
+            current_epoch: 0,
         };
 
         Ok(dag)
@@ -843,6 +851,9 @@ impl HyperDAG {
 
             current_time.max(max_parent_timestamp + 1)
         };
+        
+        // Use the dag's current epoch when creating a new block.
+        let epoch = self.current_epoch;
 
         let temp_block_creation_data = HyperBlockCreationData {
             chain_id: chain_id_val,
@@ -853,6 +864,7 @@ impl HyperDAG {
             miner: validator_address.to_string(),
             signing_key_material: validator_signing_key,
             timestamp: new_timestamp,
+            current_epoch: epoch,
         };
         let temp_block_for_reward_calc = HyperBlock::new(temp_block_creation_data)?;
 
@@ -927,6 +939,7 @@ impl HyperDAG {
             miner: validator_address.to_string(),
             signing_key_material: validator_signing_key,
             timestamp: new_timestamp,
+            current_epoch: epoch,
         };
         let mut block = HyperBlock::new(block_creation_data)?;
         block.cross_chain_references = cross_chain_references;
@@ -1238,6 +1251,9 @@ impl HyperDAG {
 
         let mut tips_guard = self.tips.write().await;
         let mut blocks_guard = self.blocks.write().await;
+        
+        // Use the dag's current epoch when creating a new genesis block for a shard.
+        let epoch = self.current_epoch;
 
         for chain_id_to_split in chains_to_split {
             if *num_chains_guard == u32::MAX {
@@ -1266,6 +1282,7 @@ impl HyperDAG {
                 miner: initial_validator_placeholder.clone(),
                 signing_key_material: &placeholder_key,
                 timestamp: new_genesis_timestamp,
+                current_epoch: epoch,
             };
             let mut genesis_block = HyperBlock::new(genesis_creation_data)?;
             genesis_block.reward = 0;
@@ -1512,6 +1529,7 @@ impl Clone for HyperDAG {
             db: self.db.clone(),
             saga: self.saga.clone(),
             self_arc: self.self_arc.clone(),
+            current_epoch: self.current_epoch,
         }
     }
 }

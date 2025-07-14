@@ -264,10 +264,13 @@ async fn send_transaction(
 
     // 4. Create and sign the transaction
     let signing_key = wallet.get_signing_key()?;
-    
+
     // FIX: Construct metadata as a HashMap to match the expected type in TransactionConfig.
     let mut metadata_map = HashMap::new();
-    metadata_map.insert("origin_component".to_string(), "hyperwallet-cli".to_string());
+    metadata_map.insert(
+        "origin_component".to_string(),
+        "hyperwallet-cli".to_string(),
+    );
     metadata_map.insert("intent".to_string(), "Standard P2P Transfer".to_string());
 
     let tx_config = TransactionConfig {

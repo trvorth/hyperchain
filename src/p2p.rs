@@ -191,17 +191,13 @@ pub enum P2PCommand {
         utxos: HashMap<String, UTXO>,
     },
     /// Request a specific block by its ID from a specific peer.
-    RequestBlock {
-        block_id: String,
-        peer_id: PeerId,
-    },
+    RequestBlock { block_id: String, peer_id: PeerId },
     /// Send a specific block to a single peer that requested it.
     SendBlockToOnePeer {
         peer_id: PeerId,
         block: Box<HyperBlock>,
     },
 }
-
 
 type KeyedPeerRateLimiter = RateLimiter<PeerId, DashMapStateStore<PeerId>, DefaultClock>;
 
@@ -659,12 +655,8 @@ impl P2PServer {
                     .await
             }
             P2PCommand::BroadcastState(blocks, utxos) => {
-                self.broadcast_message(
-                    NetworkMessageData::State(blocks, utxos),
-                    2,
-                    "state data",
-                )
-                .await
+                self.broadcast_message(NetworkMessageData::State(blocks, utxos), 2, "state data")
+                    .await
             }
             // EVOLVED: Handle broadcasting the new credential type.
             P2PCommand::BroadcastCarbonCredential(cred) => {
@@ -723,9 +715,7 @@ impl P2PServer {
         } else if topic_str.contains("carbon_credentials") {
             (context.rate_limiter_credential, "carbon_credential")
         } else {
-            warn!(
-                "Message on unknown topic '{topic_str}', applying default (block) rate limiter"
-            );
+            warn!("Message on unknown topic '{topic_str}', applying default (block) rate limiter");
             (context.rate_limiter_block, "unknown_topic_block")
         };
 
@@ -889,13 +879,9 @@ impl P2PServer {
 
         let block_id_clone = block.id.clone();
         if let Err(e) = dag_write_lock.add_block(block.clone(), &utxos).await {
-            warn!(
-                "Failed to add block (id: {block_id_clone}) from {source}: {e}"
-            );
+            warn!("Failed to add block (id: {block_id_clone}) from {source}: {e}");
         } else {
-            info!(
-                "Successfully processed and added block (id: {block_id_clone}) from {source}"
-            );
+            info!("Successfully processed and added block (id: {block_id_clone}) from {source}");
             let mut proposals_lock = proposals.write().await;
             if proposals_lock.len() >= MAX_PROPOSALS && !proposals_lock.is_empty() {
                 proposals_lock.remove(0);
@@ -923,7 +909,7 @@ impl P2PServer {
             );
             return;
         }
-        
+
         // FIX: Removed `mut` from `mempool_lock` as it's not mutated.
         let mempool_lock = mempool.write().await;
         let utxos_read_guard = utxos.read().await;

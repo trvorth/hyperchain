@@ -269,6 +269,7 @@ impl Node {
             let mempool_clone = self.mempool.clone();
             let utxos_clone = self.utxos.clone();
             let p2p_tx_clone = tx_p2p_commands.clone();
+            let saga_clone = self.saga_pallet.clone();
 
             async move {
                 while let Some(command) = rx_p2p_commands.recv().await {
@@ -360,14 +361,17 @@ impl Node {
                         }
                         P2PCommand::SendBlockToOnePeer { .. } => {
                             // This command is outbound, so the processor doesn't handle it directly.
-                            // The P2P layer will act on it.
                         }
-                        // FIX: Handle new/unimplemented P2P Commands to prevent compile errors.
                         P2PCommand::BroadcastState(_, _) => {
                             warn!("Received unhandled P2PCommand: BroadcastState. This feature is not yet implemented.");
                         }
-                        P2PCommand::BroadcastCarbonCredential(_) => {
-                            warn!("Received unhandled P2PCommand: BroadcastCarbonCredential. This feature is not yet implemented.");
+                        P2PCommand::BroadcastCarbonCredential(cred) => {
+                            // When a credential is received from the network, verify it and add it to SAGA's pool for the current epoch.
+                            if let Err(e) = saga_clone.verify_and_store_credential(cred.clone()).await {
+                                warn!(cred_id=%cred.id, "Received invalid CarbonOffsetCredential from network: {}", e);
+                            } else {
+                                info!(cred_id=%cred.id, "Successfully verified and stored CarbonOffsetCredential from network.");
+                            }
                         }
                     }
                 }
@@ -684,11 +688,7 @@ impl Node {
                     degree += 1;
                     children_map.entry(parent_id.clone()).or_default().push(id.clone());
                 } else if !local_blocks.contains_key(parent_id) {
-                    // This is a critical check. If a block's parent is not in the local DAG and also not in the sync batch,
-                    // we cannot process it. This indicates a disjoint graph.
                     warn!("Sync Error: Block {} has a missing parent {} that is not in the local DAG or the sync batch.", id, parent_id);
-                    // Depending on strictness, you could either error out or just ignore this block and its descendants.
-                    // For now, we'll error out to be safe.
                     return Err(NodeError::SyncError(format!("Missing parent {parent_id} for block {id} in sync batch")));
                 }
             }
@@ -713,12 +713,11 @@ impl Node {
                     }
                 }
             }
-            // We can safely unwrap here because we built the map from the same source.
             sorted_blocks.push(block_map.get(&id).unwrap().clone());
         }
     
         if sorted_blocks.len() != block_map.len() {
-            error!("Cycle detected in block sync batch or missing parent. This indicates a critical network error or data corruption. Sorted {} of {} blocks.", sorted_blocks.len(), block_map.len());
+            error!("Cycle detected in block sync batch or missing parent. Sorted {} of {} blocks.", sorted_blocks.len(), block_map.len());
             Err(NodeError::SyncError(
                 "Cycle detected or missing parent in block sync batch.".to_string(),
             ))

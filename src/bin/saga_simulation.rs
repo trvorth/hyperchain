@@ -116,11 +116,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .duration_since(std::time::UNIX_EPOCH)?
         .as_secs();
 
-
     let new_block = HyperBlock {
         chain_id: 0,
         id: "simulated_block_id".to_string(),
-        parents: vec![dag.read().await.get_tips(0).await.unwrap_or_default().first().cloned().unwrap_or_default()],
+        parents: vec![dag
+            .read()
+            .await
+            .get_tips(0)
+            .await
+            .unwrap_or_default()
+            .first()
+            .cloned()
+            .unwrap_or_default()],
         transactions: vec![sample_tx],
         difficulty: 10,
         validator: validator_address.clone(),
@@ -133,7 +140,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         cross_chain_swaps: vec![],
         merkle_root: "simulated_merkle_root".to_string(),
         lattice_signature: hyperchain::hyperdag::LatticeSignature {
-            public_key: validator_wallet.get_signing_key()?.verifying_key().to_bytes().to_vec(),
+            public_key: validator_wallet
+                .get_signing_key()?
+                .verifying_key()
+                .to_bytes()
+                .to_vec(),
             signature: vec![],
         },
         homomorphic_encrypted: vec![],

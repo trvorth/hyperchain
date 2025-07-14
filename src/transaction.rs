@@ -1,5 +1,3 @@
-// src/transaction.rs
-
 use crate::hyperdag::{
     HomomorphicEncrypted, HyperDAG, LatticeSignature, UTXO,
 };
@@ -31,8 +29,6 @@ pub enum TransactionError {
     LatticeSignatureVerification,
     #[error("Insufficient funds")]
     InsufficientFunds,
-    #[error("Missing developer fee")]
-    MissingDevFee,
     #[error("Invalid transaction structure: {0}")]
     InvalidStructure(String),
     #[error("Homomorphic encryption error: {0}")]
@@ -45,8 +41,6 @@ pub enum TransactionError {
     Serialization(#[from] serde_json::Error),
     #[error("Timestamp error")]
     TimestampError,
-    #[error("Emission calculation error: {0}")]
-    EmissionError(String),
     #[error("Wallet error: {0}")]
     Wallet(#[from] crate::wallet::WalletError),
     #[error("Invalid metadata: {0}")]
@@ -79,9 +73,6 @@ pub struct TransactionConfig<'a> {
     pub tx_timestamps: Arc<RwLock<HashMap<String, u64>>>,
 }
 
-/// **FIX**: This struct was created to resolve the `too_many_arguments` clippy warning.
-/// It encapsulates all data that needs to be serialized for signing or verification,
-/// making the function signatures cleaner and the code more maintainable.
 #[derive(Debug)]
 struct TransactionSigningPayload<'a> {
     sender: &'a str,
@@ -113,219 +104,85 @@ pub struct Transaction {
 impl Transaction {
     #[instrument(skip(config))]
     pub async fn new(config: TransactionConfig<'_>) -> Result<Self, TransactionError> {
-        Self::validate_structure_pre_creation(
-            &config.sender,
-            &config.receiver,
-            config.amount,
-            &config.inputs,
-            config.metadata.as_ref(),
-        )?;
+        Self::validate_structure_pre_creation(&config.sender, &config.receiver, config.amount, &config.inputs, config.metadata.as_ref())?;
         Self::check_rate_limit(&config.tx_timestamps, MAX_TRANSACTIONS_PER_MINUTE).await?;
         Self::validate_addresses(&config.sender, &config.receiver, &config.outputs)?;
-
         let timestamp = Self::get_current_timestamp()?;
         let metadata = config.metadata.unwrap_or_default();
-
-        // FIX: Use the new payload struct.
-        let signing_payload = TransactionSigningPayload {
-            sender: &config.sender,
-            receiver: &config.receiver,
-            amount: config.amount,
-            fee: config.fee,
-            inputs: &config.inputs,
-            outputs: &config.outputs,
-            metadata: &metadata,
-            timestamp,
-        };
-
+        let signing_payload = TransactionSigningPayload { sender: &config.sender, receiver: &config.receiver, amount: config.amount, fee: config.fee, inputs: &config.inputs, outputs: &config.outputs, metadata: &metadata, timestamp };
         let signature_data = Self::serialize_for_signing(&signing_payload)?;
-
-        let action_hash =
-            H256::from_slice(Keccak512::digest(&signature_data).as_slice()[..32].as_ref());
-        if !omega::reflect_on_action(action_hash).await {
-            return Err(TransactionError::OmegaRejection);
-        }
-
-        let signature_obj = LatticeSignature::sign(config.signing_key_bytes, &signature_data)
-            .map_err(|_| TransactionError::LatticeSignatureVerification)?;
-
-        let mut tx = Self {
-            id: String::new(),
-            sender: config.sender,
-            receiver: config.receiver,
-            amount: config.amount,
-            fee: config.fee,
-            inputs: config.inputs,
-            outputs: config.outputs,
-            lattice_signature: signature_obj.signature,
-            public_key: signature_obj.public_key,
-            timestamp,
-            metadata,
-        };
+        let action_hash = H256::from_slice(Keccak512::digest(&signature_data).as_slice()[..32].as_ref());
+        if !omega::reflect_on_action(action_hash).await { return Err(TransactionError::OmegaRejection); }
+        let signature_obj = LatticeSignature::sign(config.signing_key_bytes, &signature_data).map_err(|_| TransactionError::LatticeSignatureVerification)?;
+        let mut tx = Self { id: String::new(), sender: config.sender, receiver: config.receiver, amount: config.amount, fee: config.fee, inputs: config.inputs, outputs: config.outputs, lattice_signature: signature_obj.signature, public_key: signature_obj.public_key, timestamp, metadata };
         tx.id = tx.compute_hash();
-
         let mut timestamps_guard = config.tx_timestamps.write().await;
         timestamps_guard.insert(tx.id.clone(), timestamp);
         if timestamps_guard.len() > (MAX_TRANSACTIONS_PER_MINUTE * 2) as usize {
             let current_time = Self::get_current_timestamp().unwrap_or(0);
-            timestamps_guard
-                .retain(|_, &mut stored_ts| current_time.saturating_sub(stored_ts) < 3600);
+            timestamps_guard.retain(|_, &mut stored_ts| current_time.saturating_sub(stored_ts) < 3600);
         }
         Ok(tx)
     }
 
-    pub(crate) fn new_coinbase(
-        receiver: String,
-        reward: u64,
-        signing_key_bytes: &[u8],
-        outputs: Vec<Output>,
-    ) -> Result<Self, TransactionError> {
+    pub(crate) fn new_coinbase(receiver: String, reward: u64, signing_key_bytes: &[u8], outputs: Vec<Output>) -> Result<Self, TransactionError> {
         let sender = "0000000000000000000000000000000000000000000000000000000000000000".to_string();
         let timestamp = Self::get_current_timestamp()?;
-        let metadata = HashMap::new(); // Coinbase transactions have no metadata.
-
-        // FIX: Use the new payload struct.
-        let signing_payload = TransactionSigningPayload {
-            sender: &sender,
-            receiver: &receiver,
-            amount: reward,
-            fee: 0,
-            inputs: &[],
-            outputs: &outputs,
-            metadata: &metadata,
-            timestamp,
-        };
-
+        let metadata = HashMap::new();
+        let signing_payload = TransactionSigningPayload { sender: &sender, receiver: &receiver, amount: reward, fee: 0, inputs: &[], outputs: &outputs, metadata: &metadata, timestamp };
         let signature_data = Self::serialize_for_signing(&signing_payload)?;
-
-        let signature_obj = LatticeSignature::sign(signing_key_bytes, &signature_data)
-            .map_err(|_| TransactionError::LatticeSignatureVerification)?;
-
-        let mut tx = Self {
-            id: String::new(),
-            sender,
-            receiver,
-            amount: reward,
-            fee: 0,
-            inputs: vec![],
-            outputs,
-            lattice_signature: signature_obj.signature,
-            public_key: signature_obj.public_key,
-            timestamp,
-            metadata,
-        };
+        let signature_obj = LatticeSignature::sign(signing_key_bytes, &signature_data).map_err(|_| TransactionError::LatticeSignatureVerification)?;
+        let mut tx = Self { id: String::new(), sender, receiver, amount: reward, fee: 0, inputs: vec![], outputs, lattice_signature: signature_obj.signature, public_key: signature_obj.public_key, timestamp, metadata };
         tx.id = tx.compute_hash();
         Ok(tx)
     }
 
-    fn validate_structure_pre_creation(
-        sender: &str,
-        receiver: &str,
-        amount: u64,
-        inputs: &[Input],
-        metadata: Option<&HashMap<String, String>>,
-    ) -> Result<(), TransactionError> {
-        if sender.is_empty() {
-            return Err(TransactionError::InvalidStructure(
-                "Sender address cannot be empty".to_string(),
-            ));
-        }
-        if receiver.is_empty() {
-            return Err(TransactionError::InvalidStructure(
-                "Receiver address cannot be empty".to_string(),
-            ));
-        }
-        if amount == 0 && !inputs.is_empty() {
-            return Err(TransactionError::InvalidStructure(
-                "Amount cannot be zero for regular (non-coinbase) transactions".to_string(),
-            ));
-        }
+    fn validate_structure_pre_creation(sender: &str, receiver: &str, amount: u64, inputs: &[Input], metadata: Option<&HashMap<String, String>>) -> Result<(), TransactionError> {
+        if sender.is_empty() { return Err(TransactionError::InvalidStructure("Sender cannot be empty".to_string())); }
+        if receiver.is_empty() { return Err(TransactionError::InvalidStructure("Receiver cannot be empty".to_string())); }
+        if amount == 0 && !inputs.is_empty() { return Err(TransactionError::InvalidStructure("Amount cannot be zero for regular transactions".to_string())); }
         if let Some(md) = metadata {
-            if md.len() > MAX_METADATA_PAIRS {
-                return Err(TransactionError::InvalidMetadata(format!(
-                    "Exceeded max metadata pairs limit of {MAX_METADATA_PAIRS}"
-                )));
-            }
+            if md.len() > MAX_METADATA_PAIRS { return Err(TransactionError::InvalidMetadata(format!("Exceeded max metadata pairs limit of {MAX_METADATA_PAIRS}"))); }
             for (k, v) in md {
-                if k.len() > MAX_METADATA_KEY_LEN || v.len() > MAX_METADATA_VALUE_LEN {
-                    return Err(TransactionError::InvalidMetadata(format!("Metadata key/value length exceeded (max k: {MAX_METADATA_KEY_LEN}, v: {MAX_METADATA_VALUE_LEN})")));
-                }
+                if k.len() > MAX_METADATA_KEY_LEN || v.len() > MAX_METADATA_VALUE_LEN { return Err(TransactionError::InvalidMetadata(format!("Metadata key/value length exceeded"))); }
             }
         }
         Ok(())
     }
 
-    async fn check_rate_limit(
-        tx_timestamps: &Arc<RwLock<HashMap<String, u64>>>,
-        max_txs: u64,
-    ) -> Result<(), TransactionError> {
+    async fn check_rate_limit(tx_timestamps: &Arc<RwLock<HashMap<String, u64>>>, max_txs: u64) -> Result<(), TransactionError> {
         let now = Self::get_current_timestamp()?;
         let timestamps_guard = tx_timestamps.read().await;
-        let recent_tx_count = timestamps_guard
-            .values()
-            .filter(|&&t| now.saturating_sub(t) < 60)
-            .count() as u64;
-        if recent_tx_count >= max_txs {
-            return Err(TransactionError::RateLimitExceeded);
-        }
+        let recent_tx_count = timestamps_guard.values().filter(|&&t| now.saturating_sub(t) < 60).count() as u64;
+        if recent_tx_count >= max_txs { return Err(TransactionError::RateLimitExceeded); }
         Ok(())
     }
 
-    fn validate_addresses(
-        sender: &str,
-        receiver: &str,
-        outputs: &[Output],
-    ) -> Result<(), TransactionError> {
-        if !Self::is_valid_address(sender) {
-            return Err(TransactionError::InvalidAddress);
+    fn validate_addresses(sender: &str, receiver: &str, outputs: &[Output]) -> Result<(), TransactionError> {
+        if !Self::is_valid_address(sender) || !Self::is_valid_address(receiver) || outputs.iter().any(|o| !Self::is_valid_address(&o.address)) {
+            Err(TransactionError::InvalidAddress)
+        } else {
+            Ok(())
         }
-        if !Self::is_valid_address(receiver) {
-            return Err(TransactionError::InvalidAddress);
-        }
-        for output in outputs {
-            if !Self::is_valid_address(&output.address) {
-                return Err(TransactionError::InvalidAddress);
-            }
-        }
-        Ok(())
     }
 
-    fn is_valid_address(address: &str) -> bool {
-        address.len() == 64 && hex::decode(address).is_ok()
-    }
+    fn is_valid_address(address: &str) -> bool { address.len() == 64 && hex::decode(address).is_ok() }
 
     fn get_current_timestamp() -> Result<u64, TransactionError> {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .map_err(|_| TransactionError::TimestampError)
+        SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).map_err(|_| TransactionError::TimestampError)
     }
 
-    /// **FIX**: This function was refactored to accept a single `TransactionSigningPayload` struct.
-    /// This resolves the `too_many_arguments` clippy warning and improves code organization.
-    fn serialize_for_signing(
-        payload: &TransactionSigningPayload,
-    ) -> Result<Vec<u8>, TransactionError> {
+    fn serialize_for_signing(payload: &TransactionSigningPayload) -> Result<Vec<u8>, TransactionError> {
         let mut hasher = Keccak512::new();
         hasher.update(payload.sender.as_bytes());
         hasher.update(payload.receiver.as_bytes());
         hasher.update(payload.amount.to_be_bytes());
         hasher.update(payload.fee.to_be_bytes());
-        for input in payload.inputs {
-            hasher.update(input.tx_id.as_bytes());
-            hasher.update(input.output_index.to_be_bytes());
-        }
-        for output in payload.outputs {
-            hasher.update(output.address.as_bytes());
-            hasher.update(output.amount.to_be_bytes());
-        }
+        payload.inputs.iter().for_each(|i| { hasher.update(i.tx_id.as_bytes()); hasher.update(i.output_index.to_be_bytes()); });
+        payload.outputs.iter().for_each(|o| { hasher.update(o.address.as_bytes()); hasher.update(o.amount.to_be_bytes()); });
         let mut sorted_metadata: Vec<_> = payload.metadata.iter().collect();
         sorted_metadata.sort_by_key(|(k, _)| *k);
-        for (key, value) in sorted_metadata {
-            hasher.update(key.as_bytes());
-            hasher.update(value.as_bytes());
-        }
-
+        sorted_metadata.iter().for_each(|(k, v)| { hasher.update(k.as_bytes()); hasher.update(v.as_bytes()); });
         hasher.update(payload.timestamp.to_be_bytes());
         Ok(hasher.finalize().to_vec())
     }
@@ -336,94 +193,35 @@ impl Transaction {
         hasher.update(self.receiver.as_bytes());
         hasher.update(self.amount.to_be_bytes());
         hasher.update(self.fee.to_be_bytes());
-        for input_val in &self.inputs {
-            hasher.update(input_val.tx_id.as_bytes());
-            hasher.update(input_val.output_index.to_be_bytes());
-        }
-        for output_val in &self.outputs {
-            hasher.update(output_val.address.as_bytes());
-            hasher.update(output_val.amount.to_be_bytes());
-        }
+        self.inputs.iter().for_each(|i| { hasher.update(i.tx_id.as_bytes()); hasher.update(i.output_index.to_be_bytes()); });
+        self.outputs.iter().for_each(|o| { hasher.update(o.address.as_bytes()); hasher.update(o.amount.to_be_bytes()); });
         let mut sorted_metadata: Vec<_> = self.metadata.iter().collect();
         sorted_metadata.sort_by_key(|(k, _)| *k);
-        for (key, value) in sorted_metadata {
-            hasher.update(key.as_bytes());
-            hasher.update(value.as_bytes());
-        }
+        sorted_metadata.iter().for_each(|(k, v)| { hasher.update(k.as_bytes()); hasher.update(v.as_bytes()); });
         hasher.update(self.timestamp.to_be_bytes());
         hex::encode(&hasher.finalize()[..32])
     }
 
     #[instrument(skip(self, _dag, utxos))]
-    pub async fn verify(
-        &self,
-        _dag: &HyperDAG,
-        utxos: &HashMap<String, UTXO>,
-    ) -> Result<(), TransactionError> {
-        let verifier_lattice_sig = LatticeSignature {
-            public_key: self.public_key.clone(),
-            signature: self.lattice_signature.clone(),
-        };
-
-        // FIX: Use the new payload struct for verification.
-        let signing_payload = TransactionSigningPayload {
-            sender: &self.sender,
-            receiver: &self.receiver,
-            amount: self.amount,
-            fee: self.fee,
-            inputs: &self.inputs,
-            outputs: &self.outputs,
-            metadata: &self.metadata,
-            timestamp: self.timestamp,
-        };
-        let signature_data_to_verify = Transaction::serialize_for_signing(&signing_payload)?;
-
-        if !verifier_lattice_sig.verify(&signature_data_to_verify) {
-            return Err(TransactionError::LatticeSignatureVerification);
-        }
-
+    pub async fn verify(&self, _dag: &HyperDAG, utxos: &HashMap<String, UTXO>) -> Result<(), TransactionError> {
+        let verifier_sig = LatticeSignature { public_key: self.public_key.clone(), signature: self.lattice_signature.clone() };
+        let signing_payload = TransactionSigningPayload { sender: &self.sender, receiver: &self.receiver, amount: self.amount, fee: self.fee, inputs: &self.inputs, outputs: &self.outputs, metadata: &self.metadata, timestamp: self.timestamp };
+        let data_to_verify = Self::serialize_for_signing(&signing_payload)?;
+        if !verifier_sig.verify(&data_to_verify) { return Err(TransactionError::LatticeSignatureVerification); }
         if self.inputs.is_empty() {
-            // This is a coinbase transaction, special validation rules apply.
-            if self.fee != 0 {
-                return Err(TransactionError::InvalidStructure(
-                    "Coinbase transaction fee must be 0".to_string(),
-                ));
-            }
-
-            // The total output must match the block's reward field.
-            // Note: This check is now primarily done in `HyperDAG::is_valid_block`,
-            // as the transaction itself doesn't know the block's context.
-            // We perform a basic sanity check here.
-            let total_output_amount: u64 = self.outputs.iter().map(|o| o.amount).sum();
-            if total_output_amount == 0 {
-                 return Err(TransactionError::InvalidStructure(
-                    "Coinbase transaction must have a non-zero output".to_string(),
-                ));
-            }
-
+            if self.fee != 0 { return Err(TransactionError::InvalidStructure("Coinbase fee must be 0".to_string())); }
+            let total_output: u64 = self.outputs.iter().map(|o| o.amount).sum();
+            if total_output == 0 { return Err(TransactionError::InvalidStructure("Coinbase output cannot be zero".to_string())); }
         } else {
-            // This is a regular transaction.
             let mut total_input_value = 0;
-            for input_val in &self.inputs {
-                let utxo_id = format!("{}_{}", input_val.tx_id, input_val.output_index);
-                let utxo_entry = utxos.get(&utxo_id).ok_or_else(|| {
-                    TransactionError::InvalidStructure(format!("UTXO {utxo_id} not found for input"))
-                })?;
-                if utxo_entry.address != self.sender {
-                    return Err(TransactionError::InvalidStructure(format!(
-                        "Input UTXO {} does not belong to sender {}",
-                        utxo_id, self.sender
-                    )));
-                }
-                total_input_value += utxo_entry.amount;
+            for input in &self.inputs {
+                let utxo_id = format!("{}_{}", input.tx_id, input.output_index);
+                let utxo = utxos.get(&utxo_id).ok_or_else(|| TransactionError::InvalidStructure(format!("UTXO {utxo_id} not found")))?;
+                if utxo.address != self.sender { return Err(TransactionError::InvalidStructure(format!("Input UTXO {} does not belong to sender", utxo_id))); }
+                total_input_value += utxo.amount;
             }
-
             let total_output_value: u64 = self.outputs.iter().map(|o| o.amount).sum();
-
-            // The total value of inputs must equal the total value of outputs plus the fee.
-            if total_input_value != total_output_value + self.fee {
-                return Err(TransactionError::InsufficientFunds);
-            }
+            if total_input_value != total_output_value + self.fee { return Err(TransactionError::InsufficientFunds); }
         }
         Ok(())
     }
@@ -432,61 +230,19 @@ impl Transaction {
     pub fn generate_utxo(&self, index: u32) -> UTXO {
         let output = &self.outputs[index as usize];
         let utxo_id = format!("{}_{}", self.id, index);
-        UTXO {
-            address: output.address.clone(),
-            amount: output.amount,
-            tx_id: self.id.clone(),
-            output_index: index,
-            explorer_link: format!("https://hyperblockexplorer.org/utxo/{utxo_id}"),
-        }
+        UTXO { address: output.address.clone(), amount: output.amount, tx_id: self.id.clone(), output_index: index, explorer_link: format!("https://hyperblockexplorer.org/utxo/{utxo_id}") }
     }
 
     #[instrument]
-    pub async fn detect_anomaly(
-        &self,
-        recent_tx_timestamps: &Arc<RwLock<HashMap<String, u64>>>,
-    ) -> Result<f64, TransactionError> {
-        let now = Self::get_current_timestamp()?;
-        let timestamps_guard = recent_tx_timestamps.read().await;
-        let _recent_tx_count = timestamps_guard
-            .values()
-            .filter(|&&t| now.saturating_sub(t) < 60)
-            .count();
-        // Placeholder for a more complex anomaly detection model.
-        // A real implementation would compare against historical averages.
-        let placeholder_avg_amount = 1000.0;
-        let anomaly_score = if self.amount > 0 {
-            (self.amount as f64 / placeholder_avg_amount).abs()
-        } else {
-            0.0
-        };
-        // A transaction 1000x the average amount is considered highly anomalous.
-        if anomaly_score > 1000.0 {
-            return Err(TransactionError::AnomalyDetected(format!(
-                "Transaction amount {} is anomalously large (score: {})",
-                self.amount, anomaly_score
-            )));
+    pub async fn apply(&mut self, utxos: &mut Arc<RwLock<HashMap<String, UTXO>>>) -> Result<(), TransactionError> {
+        let mut utxos_writer = utxos.write().await;
+        for input in &self.inputs {
+            let utxo_id = format!("{}_{}", input.tx_id, input.output_index);
+            utxos_writer.remove(&utxo_id).ok_or_else(|| TransactionError::InvalidStructure(format!("UTXO {utxo_id} not found for removal")))?;
         }
-        Ok(anomaly_score / 1000.0)
-    }
-
-    #[instrument]
-    pub async fn apply(
-        &mut self,
-        utxos: &mut Arc<RwLock<HashMap<String, UTXO>>>,
-    ) -> Result<(), TransactionError> {
-        let mut utxos_writer_guard = utxos.write().await;
-        for input_val in &self.inputs {
-            let utxo_id = format!("{}_{}", input_val.tx_id, input_val.output_index);
-            utxos_writer_guard.remove(&utxo_id).ok_or_else(|| {
-                TransactionError::InvalidStructure(format!(
-                    "UTXO {utxo_id} not found for removal during apply"
-                ))
-            })?;
-        }
-        for (index_val, _output_val) in self.outputs.iter().enumerate() {
-            let utxo_to_add = self.generate_utxo(index_val as u32);
-            utxos_writer_guard.insert(format!("{}_{}", self.id, index_val), utxo_to_add);
+        for (index, _) in self.outputs.iter().enumerate() {
+            let utxo = self.generate_utxo(index as u32);
+            utxos_writer.insert(format!("{}_{}", self.id, index), utxo);
         }
         Ok(())
     }
@@ -494,25 +250,15 @@ impl Transaction {
 
 impl Zeroize for Transaction {
     fn zeroize(&mut self) {
-        self.id.zeroize();
-        self.sender.zeroize();
-        self.receiver.zeroize();
-        self.amount = 0;
-        self.fee = 0;
-        self.inputs.clear();
-        self.outputs.clear();
-        self.lattice_signature.zeroize();
-        self.public_key.zeroize();
-        self.timestamp = 0;
-        self.metadata.clear();
+        self.id.zeroize(); self.sender.zeroize(); self.receiver.zeroize();
+        self.amount = 0; self.fee = 0;
+        self.inputs.clear(); self.outputs.clear();
+        self.lattice_signature.zeroize(); self.public_key.zeroize();
+        self.timestamp = 0; self.metadata.clear();
     }
 }
 
-impl Drop for Transaction {
-    fn drop(&mut self) {
-        self.zeroize();
-    }
-}
+impl Drop for Transaction { fn drop(&mut self) { self.zeroize(); } }
 
 
 #[cfg(test)]

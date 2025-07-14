@@ -83,7 +83,10 @@ impl Emission {
         }
 
         let reward = reward.round() as u64;
-        let per_chain_reward = reward.checked_div(self.num_chains as u64).unwrap_or(1).max(1);
+        let per_chain_reward = reward
+            .checked_div(self.num_chains as u64)
+            .unwrap_or(1)
+            .max(1);
 
         if elapsed_periods > self.last_halving_period {
             HALVING_EVENTS.inc();
