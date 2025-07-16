@@ -1,5 +1,5 @@
 //! --- Hyperchain Hybrid Consensus Engine ---
-//! v1.0.0 - Hybrid PoW/PoS/PoSe (Hardened & Eco-Sentiency Aware)
+//! v1.2.1 - Canonically Corrected & Hardened
 //! This module implements the core consensus rules for the Hyperchain network.
 //! It uses a hybrid model that combines three critical, non-replaceable mechanisms:
 //!
@@ -24,14 +24,14 @@
 //!     making attacks prohibitively expensive. PoSe makes PoW smarter, adaptive, and
 //!     more secure.
 
-use crate::hyperdag::{HyperBlock, HyperDAG, UTXO};
-use crate::saga::PalletSaga;
+use crate::hyperdag::{HyperBlock, HyperDAG, HyperDAGError, UTXO}; // FIX: Corrected import path
+use crate::saga::{PalletSaga, SagaError};
 use crate::transaction::TransactionError;
 use std::collections::HashMap;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::RwLock;
-use tracing::{debug, instrument, warn};
+use tracing::{debug, instrument};
 
 #[derive(Error, Debug)]
 pub enum ConsensusError {
@@ -47,6 +47,12 @@ pub enum ConsensusError {
     OmegaRejection(String),
     #[error("Database or state error during validation: {0}")]
     StateError(String),
+    #[error("Saga error: {0}")]
+    SagaError(#[from] SagaError),
+    #[error("Anyhow error: {0}")]
+    Anyhow(#[from] anyhow::Error),
+    #[error("HyperDAG error: {0}")]
+    HyperDAG(#[from] HyperDAGError),
 }
 
 /// The main consensus engine for Hyperchain. It orchestrates the various validation
@@ -63,23 +69,24 @@ impl Consensus {
 
     /// The primary validation function. It checks a block against all consensus rules
     /// in a specific, non-negotiable order: structure, stake, transactions, and finally the computational work.
-    #[instrument(skip(self, block, dag, utxos), fields(block_id = %block.id, miner = %block.miner))]
+    #[instrument(skip(self, block, dag_arc, utxos), fields(block_id = %block.id, miner = %block.miner))]
     pub async fn validate_block(
         &self,
         block: &HyperBlock,
-        dag: &HyperDAG,
+        dag_arc: &Arc<HyperDAG>,
         utxos: &Arc<RwLock<HashMap<String, UTXO>>>,
     ) -> Result<(), ConsensusError> {
         // --- Rule 1: Structural & Cryptographic Integrity (Fastest Check) ---
-        self.validate_block_structure(block)?;
+        self.validate_block_structure(block, dag_arc).await?;
 
         // --- Rule 2: Proof-of-Stake (PoS) - The "Right to Participate" ---
-        self.validate_proof_of_stake(&block.validator, dag).await?;
+        self.validate_proof_of_stake(&block.validator, dag_arc).await?;
 
         // --- Rule 3: Transaction Validity ---
         let utxos_guard = utxos.read().await;
-        for tx in block.transactions.iter().skip(1) { // Skip coinbase
-            tx.verify(dag, &utxos_guard).await?;
+        for tx in block.transactions.iter().skip(1) {
+            // Skip coinbase
+            tx.verify(dag_arc, &utxos_guard).await?;
         }
         drop(utxos_guard);
 
@@ -91,7 +98,11 @@ impl Consensus {
     }
 
     /// Performs all fundamental structural and cryptographic checks on a block.
-    fn validate_block_structure(&self, block: &HyperBlock) -> Result<(), ConsensusError> {
+    async fn validate_block_structure(
+        &self,
+        block: &HyperBlock,
+        dag_arc: &Arc<HyperDAG>,
+    ) -> Result<(), ConsensusError> {
         if block.id.is_empty() || block.merkle_root.is_empty() || block.validator.is_empty() {
             return Err(ConsensusError::InvalidBlockStructure(
                 "Core fields (ID, Merkle Root, Validator) cannot be empty".to_string(),
@@ -103,10 +114,7 @@ impl Consensus {
             ));
         }
 
-        if !block.verify_signature().map_err(|e| {
-            warn!("Block signature verification failed: {}", e);
-            ConsensusError::InvalidBlockStructure("Block signature verification failed".to_string())
-        })? {
+        if !block.verify_signature()? {
             return Err(ConsensusError::InvalidBlockStructure(
                 "Block signature verification failed".to_string(),
             ));
@@ -119,25 +127,30 @@ impl Consensus {
                 "Merkle root mismatch".to_string(),
             ));
         }
-        
+
         let coinbase = &block.transactions[0];
-        if !coinbase.inputs.is_empty() {
-             return Err(ConsensusError::InvalidBlockStructure(
-                "First transaction in a block must be a coinbase (have no inputs)".to_string(),
+        if !coinbase.is_coinbase() {
+            return Err(ConsensusError::InvalidBlockStructure(
+                "First transaction must be coinbase".to_string(),
             ));
         }
         if coinbase.outputs.len() < 2 {
-             return Err(ConsensusError::InvalidBlockStructure(
-                "Coinbase transaction must have at least two outputs (miner reward and dev fee)"
-                    .to_string(),
+            return Err(ConsensusError::InvalidBlockStructure(
+                "Coinbase must have at least two outputs".to_string(),
             ));
         }
 
+        let expected_reward = self.saga.calculate_dynamic_reward(block, dag_arc).await?;
+        if block.reward != expected_reward {
+            return Err(ConsensusError::InvalidBlockStructure(format!(
+                "Block reward mismatch. Claimed: {}, Expected: {}",
+                block.reward, expected_reward
+            )));
+        }
 
         Ok(())
     }
 
-    /// Proof-of-Stake (PoS) check: Verifies the validator meets the minimum stake requirement.
     async fn validate_proof_of_stake(
         &self,
         validator_address: &str,
@@ -153,21 +166,18 @@ impl Consensus {
 
         if validator_stake < min_stake {
             return Err(ConsensusError::ProofOfStakeFailed(format!(
-                "Validator {validator_address} has insufficient stake. Required: {min_stake}, Found: {validator_stake}"
+                "Insufficient stake. Required: {min_stake}, Found: {validator_stake}"
             )));
         }
         Ok(())
     }
 
-    /// Proof-of-Work (PoW) check: Validates that the block's hash meets the
-    /// dynamically adjusted difficulty target required by Proof-of-Sentiency (PoSe).
     async fn validate_proof_of_work(&self, block: &HyperBlock) -> Result<(), ConsensusError> {
-        // PoSe: Get the specific difficulty required for *this* miner from SAGA.
         let effective_difficulty = self.get_effective_difficulty(&block.miner).await;
 
         if block.difficulty != effective_difficulty {
             return Err(ConsensusError::ProofOfWorkFailed(format!(
-                "Block difficulty mismatch. Claimed: {}, Required by PoSe: {}",
+                "Difficulty mismatch. Claimed: {}, Required: {}",
                 block.difficulty, effective_difficulty
             )));
         }
@@ -180,19 +190,17 @@ impl Consensus {
 
         if !crate::miner::Miner::hash_meets_target(&block_pow_hash, &target_hash) {
             return Err(ConsensusError::ProofOfWorkFailed(
-                "Block hash does not meet the required PoSe difficulty target.".to_string(),
+                "Block hash does not meet PoSe difficulty target.".to_string(),
             ));
         }
 
         debug!(
-            "Proof-of-Work validation passed for miner {}. Effective PoSe difficulty: {}",
+            "PoW validation passed for miner {}. Effective PoSe difficulty: {}",
             block.miner, effective_difficulty
         );
         Ok(())
     }
 
-    /// **Proof-of-Sentiency (PoSe) Core Logic**
-    /// Calculates the effective PoW difficulty for a given miner based on their Saga Credit Score (SCS).
     pub async fn get_effective_difficulty(&self, miner_address: &str) -> u64 {
         let rules = self.saga.economy.epoch_rules.read().await;
         let base_difficulty = rules
@@ -206,16 +214,11 @@ impl Consensus {
             .read()
             .await
             .get(miner_address)
-            .map_or(0.5, |s| s.score); // Default to a neutral score of 0.5 if unknown
+            .map_or(0.5, |s| s.score);
 
-        // The difficulty modifier is inversely proportional to the score's deviation from neutral.
-        // - SCS = 1.0 (perfect) -> modifier = 0.5 (50% easier)
-        // - SCS = 0.5 (neutral) -> modifier = 1.0 (no change)
-        // - SCS = 0.0 (terrible) -> modifier = 1.5 (50% harder)
         let difficulty_modifier = 1.0 - (scs - 0.5);
         let effective_difficulty = (base_difficulty as f64 * difficulty_modifier).round() as u64;
 
-        // Clamp the difficulty to a sane range to prevent extreme values.
         effective_difficulty.clamp(
             base_difficulty.saturating_div(2),
             base_difficulty.saturating_mul(2),

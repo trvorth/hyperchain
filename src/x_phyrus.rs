@@ -1,4 +1,4 @@
-//! 🪖 X-PHYRUS™ Protocol Stack (v0.4.0 - Hardened Edition)
+//! 🪖 X-PHYRUS™ Protocol Stack (v0.5.0 - Hardened Edition)
 //! A groundbreaking, military-grade blockchain framework integrated directly into Hyperchain.
 //! This module provides advanced security, deployment, and operational integrity features.
 
@@ -10,6 +10,7 @@ use std::env;
 use std::net::SocketAddr;
 use std::path::Path;
 use tokio::fs;
+use tokio::net::TcpListener;
 
 // --- Primary Public Interface ---
 pub async fn initialize_pre_boot_sequence(config: &Config, wallet_path: &Path) -> Result<()> {
@@ -62,38 +63,42 @@ async fn check_file_integrity(wallet_path: &Path) -> Result<()> {
 
 async fn check_port_availability(config: &Config) -> Result<()> {
     debug!("[X-PHYRUS::Zero-Hang™] Checking network port availability...");
+
+    // Check API Port
     let api_addr: SocketAddr = config.api_address.parse().context(format!(
         "Invalid API address in config: {}",
         config.api_address
     ))?;
-    if tokio::net::TcpListener::bind(api_addr).await.is_err() {
-        error!(
-            "FATAL: API address {api_addr} is already in use or cannot be bound. Halting startup."
-        );
-        return Err(anyhow::anyhow!("API address {} unavailable.", api_addr));
+    match TcpListener::bind(api_addr).await {
+        Ok(_) => info!("[OK] API port {} is available.", api_addr.port()),
+        Err(e) => {
+            error!("FATAL: API address {api_addr} is already in use or cannot be bound: {e}. Halting startup.");
+            return Err(anyhow::anyhow!("API address {} unavailable.", api_addr));
+        }
     }
-    info!("[OK] API port {} is available.", api_addr.port());
+
+    // Check P2P Port
     let p2p_multiaddr: libp2p::Multiaddr = config.p2p_address.parse().context(format!(
         "Invalid P2P address in config: {}",
         config.p2p_address
     ))?;
     if let Some(p2p_socket_addr) = multiaddr_to_socket_addr(&p2p_multiaddr) {
-        if tokio::net::TcpListener::bind(p2p_socket_addr)
-            .await
-            .is_err()
-        {
-            error!("FATAL: P2P address {p2p_socket_addr} is already in use or cannot be bound. Halting startup.");
-            return Err(anyhow::anyhow!(
-                "P2P address {} unavailable.",
-                p2p_socket_addr
-            ));
+        match TcpListener::bind(p2p_socket_addr).await {
+            Ok(_) => info!("[OK] P2P port {} is available.", p2p_socket_addr.port()),
+            Err(e) => {
+                error!("FATAL: P2P address {p2p_socket_addr} is already in use or cannot be bound: {e}. Halting startup.");
+                return Err(anyhow::anyhow!(
+                    "P2P address {} unavailable.",
+                    p2p_socket_addr
+                ));
+            }
         }
-        info!("[OK] P2P port {} is available.", p2p_socket_addr.port());
     } else {
         warn!("[Warning] Could not resolve P2P multiaddress to a specific TCP port for pre-checking. Assuming it's valid.");
     }
     Ok(())
 }
+
 
 // EVOLVED: This function is now more robust. Instead of just checking for the `CURRENT` file,
 // it attempts to open the database in read-only mode. This can detect corruption or a lock
@@ -105,17 +110,21 @@ async fn check_chain_state_integrity() -> Result<()> {
         warn!("[INFO] Chain state DB not found at '{DB_PATH}'. This is normal for a first run.");
         return Ok(());
     }
-    
+
     info!("[INFO] Found existing database at '{DB_PATH}'. Attempting to open read-only to verify integrity...");
     let opts = Options::default();
     match rocksdb::DB::open_for_read_only(&opts, DB_PATH, false) {
         Ok(_) => {
             info!("[OK] Chain state database opened successfully. Integrity check passed.");
             Ok(())
-        },
+        }
         Err(e) => {
             error!("FATAL: Could not open existing chain state database: {e}. The database may be corrupt or locked by another process. Please resolve the issue before restarting. Halting startup.");
-            Err(anyhow::anyhow!("Chain state DB at '{}' is inaccessible or corrupt: {}", DB_PATH, e))
+            Err(anyhow::anyhow!(
+                "Chain state DB at '{}' is inaccessible or corrupt: {}",
+                DB_PATH,
+                e
+            ))
         }
     }
 }
