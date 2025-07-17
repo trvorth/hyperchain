@@ -1,4 +1,4 @@
-use crate::hyperdag::HyperBlock;
+use crate::hyperdag::{HyperBlock, HyperDAG};
 use anyhow::Result;
 use hex;
 use rand::Rng;
@@ -9,7 +9,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use thiserror::Error;
-use tokio::sync::RwLock;
 use tracing::{info, instrument, warn};
 
 #[derive(Error, Debug)]
@@ -53,7 +52,7 @@ impl From<rayon::ThreadPoolBuildError> for MiningError {
 #[derive(Debug)]
 pub struct MinerConfig {
     pub address: String,
-    pub dag: Arc<RwLock<crate::hyperdag::HyperDAG>>,
+    pub dag: Arc<HyperDAG>,
     pub difficulty_hex: String,
     pub target_block_time: u64,
     pub use_gpu: bool,
@@ -64,7 +63,7 @@ pub struct MinerConfig {
 #[derive(Clone, Debug)]
 pub struct Miner {
     _address: String,
-    _dag: Arc<RwLock<crate::hyperdag::HyperDAG>>,
+    _dag: Arc<HyperDAG>,
     _difficulty: u64,
     target_block_time: u64,
     _use_gpu: bool,

@@ -1,12 +1,12 @@
 //! --- Hyperchain HyperDAG Ledger ---
-//! v1.5.0 - Architecturally Sound Edition
-//! This file is the canonical definition for the HyperDAG and its core
-//! data structures, now with consistent interior mutability.
+//! v1.6.6 - Argument Order Fix
 
 use crate::emission::Emission;
 use crate::mempool::Mempool;
 use crate::saga::{CarbonOffsetCredential, GovernanceProposal, PalletSaga, ProposalType};
 use crate::transaction::Transaction;
+use crate::miner::Miner;
+use crate::wallet::Wallet;
 use ed25519_dalek::{Signature as DalekSignature, Signer, SigningKey, Verifier, VerifyingKey};
 use hex;
 use lru::LruCache;
@@ -41,6 +41,8 @@ const MAX_BLOCKS_PER_MINUTE: u64 = 15;
 const MIN_VALIDATOR_STAKE: u64 = 50;
 const SLASHING_PENALTY: u64 = 30;
 const CACHE_SIZE: usize = 1_000;
+const ANOMALY_DETECTION_BASELINE_BLOCKS: usize = 20;
+
 
 lazy_static::lazy_static! {
     static ref BLOCKS_PROCESSED: IntCounter = register_int_counter!("blocks_processed_total", "Total blocks processed").unwrap();
@@ -103,13 +105,14 @@ pub enum HyperDAGError {
     SelfReferenceNotInitialized,
     #[error("RocksDB error: {0}")]
     RocksDB(#[from] rocksdb::Error),
+    #[error("Miner error: {0}")]
+    MinerError(String),
 }
 
 pub struct SigningData<'a> {
     pub parents: &'a [String],
     pub transactions: &'a [Transaction],
     pub timestamp: u64,
-    pub nonce: u64,
     pub difficulty: u64,
     pub validator: &'a str,
     pub miner: &'a str,
@@ -318,7 +321,6 @@ impl fmt::Display for HyperBlock {
             }
         )?;
         writeln!(f, "║ 🧾 Transactions:   {}", self.transactions.len())?;
-        writeln!(f, "🌳 Merkle Root:    {}", self.merkle_root)?;
         let total_offset: f64 = self
             .carbon_credentials
             .iter()
@@ -330,6 +332,7 @@ impl fmt::Display for HyperBlock {
                 "║ 🌍 Carbon Offset:  {total_offset:.4} tonnes CO₂e"
             )?;
         }
+        writeln!(f, "║ 🌳 Merkle Root:    {}", self.merkle_root)?;
         writeln!(f, "╟─ Mining Details ─{}╢", "─".repeat(70))?;
         writeln!(f, "║ ⛏️  Miner:           {}", self.miner)?;
         writeln!(f, "║ ✨ Nonce:          {}", self.nonce)?;
@@ -354,7 +357,6 @@ impl HyperBlock {
             parents: &data.parents,
             transactions: &data.transactions,
             timestamp: data.timestamp,
-            nonce,
             difficulty: data.difficulty,
             validator: &data.validator,
             miner: &data.miner,
@@ -408,7 +410,6 @@ impl HyperBlock {
             hasher.update(tx.id.as_bytes());
         }
         hasher.update(data.timestamp.to_be_bytes());
-        hasher.update(data.nonce.to_be_bytes());
         hasher.update(data.difficulty.to_be_bytes());
         hasher.update(data.validator.as_bytes());
         hasher.update(data.miner.as_bytes());
@@ -458,7 +459,6 @@ impl HyperBlock {
             parents: &self.parents,
             transactions: &self.transactions,
             timestamp: self.timestamp,
-            nonce: self.nonce,
             difficulty: self.difficulty,
             validator: &self.validator,
             miner: &self.miner,
@@ -504,7 +504,7 @@ impl HyperDAG {
         signing_key: &[u8],
         saga: Arc<PalletSaga>,
         db: DB,
-    ) -> Result<Self, HyperDAGError> {
+    ) -> Result<Arc<Self>, HyperDAGError> {
         let mut blocks_map = HashMap::new();
         let mut tips_map = HashMap::new();
         let mut validators_map = HashMap::new();
@@ -537,7 +537,7 @@ impl HyperDAG {
             MIN_VALIDATOR_STAKE * num_chains as u64 * 2,
         );
 
-        Ok(Self {
+        let dag = Self {
             blocks: Arc::new(RwLock::new(blocks_map)),
             tips: Arc::new(RwLock::new(tips_map)),
             validators: Arc::new(RwLock::new(validators_map)),
@@ -562,7 +562,83 @@ impl HyperDAG {
             saga,
             self_arc: Weak::new(),
             current_epoch: Arc::new(RwLock::new(0)),
-        })
+        };
+        
+        let arc_dag = Arc::new(dag);
+        let weak_self = Arc::downgrade(&arc_dag);
+        
+        let ptr = Arc::as_ptr(&arc_dag) as *mut HyperDAG;
+        
+        unsafe {
+            (*ptr).self_arc = weak_self;
+        }
+
+        Ok(arc_dag)
+    }
+
+    /// Runs a continuous solo mining loop.
+    #[instrument(skip(self, wallet, mempool, utxos, miner))]
+    pub async fn run_solo_miner(
+        self: Arc<Self>,
+        wallet: Arc<Wallet>,
+        mempool: Arc<RwLock<Mempool>>,
+        utxos: Arc<RwLock<HashMap<String, UTXO>>>,
+        miner: Arc<Miner>,
+        mining_interval_secs: u64,
+    ) {
+        info!("SOLO MINER: Starting proactive mining loop with an interval of {} seconds.", mining_interval_secs);
+
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(mining_interval_secs)).await;
+            info!("SOLO MINER: Waking up to attempt block creation.");
+
+            let miner_address = wallet.address();
+            let signing_key = match wallet.get_signing_key() {
+                Ok(key) => key,
+                Err(e) => {
+                    warn!("SOLO MINER: Could not get signing key, skipping cycle. Error: {}", e);
+                    continue;
+                }
+            };
+            
+            let chain_id_to_mine: u32 = 0;
+
+            let mut candidate_block = match self.create_candidate_block(
+                &signing_key.to_bytes(),
+                &miner_address,
+                &mempool,
+                &utxos,
+                chain_id_to_mine
+            ).await {
+                Ok(block) => {
+                    info!("SOLO MINER: Successfully created candidate block {}.", block.id);
+                    block
+                },
+                Err(e) => {
+                    warn!("SOLO MINER: Failed to create candidate block: {}. Retrying after delay.", e);
+                    continue;
+                }
+            };
+            
+            info!("SOLO MINER: Starting proof-of-work for candidate block {}...", candidate_block.id);
+            if let Err(e) = miner.solve_pow(&mut candidate_block) {
+                warn!("SOLO MINER: Mining failed for the current candidate block: {}", e);
+                continue;
+            }
+
+            let mined_block = candidate_block;
+            info!("SOLO MINER: Successfully mined block with ID: {}", mined_block.id);
+            println!("{}", mined_block);
+
+            match self.add_block(mined_block.clone(), &utxos).await {
+                Ok(true) => {
+                    info!("SOLO MINER: Successfully added new block to the HyperDAG.");
+                    mempool.read().await.remove_transactions(&mined_block.transactions).await;
+                },
+                Ok(false) => warn!("SOLO MINER: Mined block was rejected by the DAG (already exists?)."),
+                Err(e) => warn!("SOLO MINER: Failed to add mined block to DAG: {}", e),
+            }
+        }
     }
 
     #[instrument]
@@ -606,8 +682,9 @@ impl HyperDAG {
             return Ok(false);
         }
 
+        // FIX: Swapped the arguments to match the function definition.
         let anomaly_score = self
-            .detect_anomaly_internal(&block, &blocks_write_guard)
+            .detect_anomaly_internal(&blocks_write_guard, &block)
             .await?;
         if anomaly_score > 0.9 {
             if let Some(stake) = validators_guard.get_mut(&block.validator) {
@@ -955,10 +1032,9 @@ impl HyperDAG {
             return Err(HyperDAGError::LatticeSignatureVerification);
         }
 
-        let target_hash_bytes =
-            crate::miner::Miner::calculate_target_from_difficulty(block.difficulty);
+        let target_hash_bytes = Miner::calculate_target_from_difficulty(block.difficulty);
         let block_pow_hash = block.hash();
-        if !crate::miner::Miner::hash_meets_target(
+        if !Miner::hash_meets_target(
             &hex::decode(block_pow_hash).unwrap(),
             &target_hash_bytes,
         ) {
@@ -996,7 +1072,7 @@ impl HyperDAG {
                     )));
                 }
             }
-            // FIX: Remove unused variable warning
+            
             for (_ref_chain_id, ref_block_id) in &block.cross_chain_references {
                 if !blocks_guard.contains_key(ref_block_id) {
                     return Err(HyperDAGError::CrossChainReferenceError(format!(
@@ -1040,7 +1116,7 @@ impl HyperDAG {
         }
 
         let blocks_guard = self.blocks.read().await;
-        let anomaly_score = self.detect_anomaly_internal(block, &blocks_guard).await?;
+        let anomaly_score = self.detect_anomaly_internal(&blocks_guard, block).await?;
         if anomaly_score > 0.7 {
             ANOMALIES_DETECTED.inc();
             warn!(
@@ -1054,19 +1130,25 @@ impl HyperDAG {
 
     async fn detect_anomaly_internal(
         &self,
-        block: &HyperBlock,
         blocks_guard: &HashMap<String, HyperBlock>,
+        block: &HyperBlock,
     ) -> Result<f64, HyperDAGError> {
-        if blocks_guard.is_empty() {
+        if blocks_guard.len() < ANOMALY_DETECTION_BASELINE_BLOCKS {
             return Ok(0.0);
         }
+
         let avg_tx_count: f64 = blocks_guard
             .values()
             .map(|b_val| b_val.transactions.len() as f64)
             .sum::<f64>()
-            / (blocks_guard.len() as f64).max(1.0);
+            / (blocks_guard.len() as f64);
+
+        if avg_tx_count < 1.0 {
+            return if block.transactions.len() > 10 { Ok(1.0) } else { Ok(0.0) };
+        }
+
         let anomaly_score =
-            (block.transactions.len() as f64 - avg_tx_count).abs() / avg_tx_count.max(1.0);
+            (block.transactions.len() as f64 - avg_tx_count).abs() / avg_tx_count;
         Ok(anomaly_score)
     }
 
@@ -1399,7 +1481,7 @@ impl HyperDAG {
         (chain_blocks_map, utxos_map_for_chain)
     }
 
-    pub async fn run_periodic_maintenance(&self) -> Result<(), HyperDAGError> {
+    pub async fn run_periodic_maintenance(&self) {
         info!("Running periodic DAG maintenance...");
 
         if let Err(e) = self.adjust_difficulty().await {
@@ -1415,10 +1497,10 @@ impl HyperDAG {
         let mut epoch_guard = self.current_epoch.write().await;
         *epoch_guard += 1;
         let current_epoch = *epoch_guard;
+        
         self.saga.process_epoch_evolution(current_epoch, self).await;
-
+        
         info!("Periodic DAG maintenance complete for epoch {current_epoch}.");
-        Ok(())
     }
 }
 
@@ -1439,7 +1521,7 @@ impl Clone for HyperDAG {
             anomaly_history: self.anomaly_history.clone(),
             cross_chain_swaps: self.cross_chain_swaps.clone(),
             smart_contracts: self.smart_contracts.clone(),
-            cache: self.cache.clone(),
+	    cache: self.cache.clone(),
             db: self.db.clone(),
             saga: self.saga.clone(),
             self_arc: self.self_arc.clone(),

@@ -76,6 +76,7 @@ pub struct P2pConfig {
     pub mesh_n: usize,
     pub mesh_n_low: usize,
     pub mesh_n_high: usize,
+    pub mesh_outbound_min: usize,
 }
 
 impl Default for P2pConfig {
@@ -86,8 +87,9 @@ impl Default for P2pConfig {
                 .parse()
                 .unwrap_or(10000),
             mesh_n: 4,
-            mesh_n_low: 1,
+            mesh_n_low: 2,
             mesh_n_high: 8,
+            mesh_outbound_min: 2,
         }
     }
 }
@@ -236,9 +238,9 @@ impl Config {
                 "Mining threads must be between 1 and 128".to_string(),
             ));
         }
-        if self.p2p.mesh_n_low > self.p2p.mesh_n || self.p2p.mesh_n > self.p2p.mesh_n_high {
+        if self.p2p.mesh_n_low > self.p2p.mesh_n || self.p2p.mesh_n > self.p2p.mesh_n_high || self.p2p.mesh_outbound_min > self.p2p.mesh_n_low {
             return Err(ConfigError::InvalidParameter(
-                "Invalid mesh parameters: must satisfy mesh_n_low <= mesh_n <= mesh_n_high"
+                "Invalid mesh parameters: must satisfy mesh_outbound_min <= mesh_n_low <= mesh_n <= mesh_n_high"
                     .to_string(),
             ));
         }

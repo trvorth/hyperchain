@@ -29,7 +29,7 @@ pub enum MempoolError {
     TimestampError,
 }
 
-#[derive(Clone, Debug)] // Added derive(Debug)
+#[derive(Clone, Debug)]
 pub struct Mempool {
     transactions: Arc<RwLock<HashMap<String, Transaction>>>,
     max_age: Duration,
@@ -50,13 +50,18 @@ impl Mempool {
         }
     }
 
-    #[instrument]
+    #[instrument(skip(self, tx, utxos, dag))]
     pub async fn add_transaction(
         &self,
         tx: Transaction,
         utxos: &HashMap<String, UTXO>,
         dag: &HyperDAG,
     ) -> Result<(), MempoolError> {
+        // Run verification before getting a write lock
+        if let Err(e) = tx.verify(dag, utxos).await {
+            return Err(MempoolError::TransactionValidation(e.to_string()));
+        }
+
         let mut transactions = self.transactions.write().await;
         let mut current_size_bytes_guard = self.current_size_bytes.write().await;
 
@@ -106,6 +111,34 @@ impl Mempool {
             None
         }
     }
+    
+    /// **NEW**: Efficiently removes a slice of transactions from the mempool.
+    #[instrument(skip(self, txs_to_remove))]
+    pub async fn remove_transactions(&self, txs_to_remove: &[Transaction]) {
+        if txs_to_remove.is_empty() {
+            return;
+        }
+
+        let mut transactions_guard = self.transactions.write().await;
+        let mut current_size_bytes_guard = self.current_size_bytes.write().await;
+        let mut bytes_removed = 0;
+        let mut count_removed = 0;
+
+        for tx_to_remove in txs_to_remove {
+            if let Some(removed_tx) = transactions_guard.remove(&tx_to_remove.id) {
+                bytes_removed += serde_json::to_vec(&removed_tx).unwrap_or_default().len();
+                count_removed += 1;
+            }
+        }
+
+        if count_removed > 0 {
+            *current_size_bytes_guard = current_size_bytes_guard.saturating_sub(bytes_removed);
+            MEMPOOL_SIZE.set(*current_size_bytes_guard as f64);
+            MEMPOOL_TRANSACTIONS.set(transactions_guard.len() as f64);
+            TRANSACTIONS_REMOVED.inc_by(count_removed);
+            info!("Removed {} transactions included in new block.", count_removed);
+        }
+    }
 
     #[instrument]
     pub async fn prune_expired(&self) {
@@ -142,7 +175,7 @@ impl Mempool {
         }
     }
 
-    #[instrument]
+    #[instrument(skip(self, _dag, _utxos))]
     pub async fn select_transactions(
         &self,
         _dag: &HyperDAG,

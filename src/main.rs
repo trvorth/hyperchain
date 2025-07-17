@@ -1,3 +1,6 @@
+//! --- Hyperchain Node Main Entrypoint ---
+//! v1.2.2 - Final & Production-Ready Edition
+
 use clap::{Parser, Subcommand};
 use hyperchain::{
     config::{Config, ConfigError},
@@ -14,8 +17,6 @@ use thiserror::Error;
 use tokio::task;
 use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
-
-pub mod omega;
 
 #[derive(Debug, Error)]
 enum CliError {
@@ -74,19 +75,22 @@ enum WalletCommands {
     },
 }
 
-#[tokio::main]
-async fn main() -> Result<(), CliError> {
-    dotenvy::dotenv().ok();
+fn initialize_logging(level: &str) {
     let subscriber = FmtSubscriber::builder()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
+        .with_env_filter(EnvFilter::new(level))
         .finish();
     tracing::subscriber::set_global_default(subscriber)
         .expect("Failed to set up logging subscriber.");
+}
 
-    info!("Hyperchain node starting up...");
+#[tokio::main]
+async fn main() -> Result<(), CliError> {
     let cli = Cli::parse();
+
+    // Defer full logging initialization until after password prompt for 'start' command
+    if !matches!(cli.command, Commands::Start { .. }) {
+        initialize_logging("info");
+    }
 
     match cli.command {
         Commands::Wallet { wallet_command } => handle_wallet_command(wallet_command).await?,
@@ -99,29 +103,35 @@ async fn main() -> Result<(), CliError> {
 async fn handle_wallet_command(command: WalletCommands) -> Result<(), CliError> {
     match command {
         WalletCommands::Generate { output } => {
-            info!("Generating a new encrypted wallet...");
+            println!("Generating a new encrypted wallet...");
             let password = prompt_for_password(true)?;
 
-            info!("Encrypting and saving new wallet...");
+            println!("Encrypting and saving new wallet...");
             let new_wallet = Wallet::new()?;
 
             let output_clone = output.clone();
             task::spawn_blocking(move || new_wallet.save_to_file(&output_clone, &password))
                 .await??;
 
-            info!("Wallet saved successfully to '{}'.", output.display());
+            println!("Wallet saved successfully to '{}'.", output.display());
         }
     }
     Ok(())
 }
 
 async fn start_node(config_path: PathBuf, wallet_path: PathBuf) -> Result<(), CliError> {
-    info!("Loading configuration from '{}'.", config_path.display());
+    // Get password *before* initializing complex services and verbose logging.
+    let password = prompt_for_password(false)?;
+
+    // Now, load config and initialize logging based on the config file.
     let config = Config::load(&config_path.display().to_string())?;
+    initialize_logging(&config.logging.level);
+
+    info!("Hyperchain node starting up...");
+    info!("Configuration loaded from '{}'.", config_path.display());
 
     x_phyrus::initialize_pre_boot_sequence(&config, &wallet_path).await?;
 
-    let password = prompt_for_password(false)?;
     info!("Decrypting wallet (this may take a while)...");
     let wallet_path_clone = wallet_path.clone();
     let wallet =
