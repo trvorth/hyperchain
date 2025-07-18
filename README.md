@@ -222,7 +222,7 @@ Building on Windows requires the MSVC C++ toolchain and manual installation of R
     The HyperChain node may be initiated by executing the `start_node` binary. The system will automatically load the configuration and wallet files.
     ```bash
     # You will be prompted for the wallet password
-    cargo run --release --bin hyperchain -- start --config config.toml --wallet wallet.key
+    cargo run --release --features infinite-strata --bin hyperchain -- start --config config.toml --wallet wallet.key
     ```
     The operator will be prompted to supply the wallet passphrase, after which the node will initialize its services and commence network operations.
 4.  **Demonstrating the ΛΣ-ΩMEGA Module**
