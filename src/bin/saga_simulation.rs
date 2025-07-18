@@ -25,7 +25,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Receiver Address:  {receiver_address}");
 
     // 2. Core Components (SAGA and HyperDAG)
-    let saga_pallet = Arc::new(PalletSaga::new());
+    let saga_pallet = Arc::new(PalletSaga::new(
+        #[cfg(feature = "infinite-strata")]
+        None,
+    ));
 
     let db_path = "saga_sim_db_temp";
     if std::path::Path::new(db_path).exists() {
@@ -35,7 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     opts.create_if_missing(true);
     let db = DB::open(&opts, db_path)?;
 
-    let dag_arc = Arc::new(RwLock::new(
+    let dag_arc = Arc::new(
         HyperDAG::new(
             &validator_address,
             60, // target block time (seconds)
@@ -45,7 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             saga_pallet.clone(),
             db,
         )?,
-    ));
+    );
     println!("SAGA and HyperDAG initialized.");
 
     // 3. Mempool and UTXO Set
@@ -121,20 +124,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Sample transaction created with ID: {}", sample_tx.id);
 
     {
-        let dag_reader = dag_arc.read().await;
         let utxos_reader = utxos_arc.read().await;
         mempool_arc
             .write()
             .await
-            .add_transaction(sample_tx, &utxos_reader, &dag_reader)
+            .add_transaction(sample_tx, &utxos_reader, &dag_arc)
             .await?;
     }
 
     // 5. Use the HyperDAG to create a valid candidate block
     println!("Requesting candidate block from HyperDAG...");
     let mut candidate_block = {
-        let dag_reader = dag_arc.read().await;
-        dag_reader
+        dag_arc
             .create_candidate_block(
                 &validator_wallet.get_signing_key()?.to_bytes(),
                 &validator_address,
@@ -165,8 +166,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 6. Evaluate the block with SAGA (this happens inside add_block)
     println!("Adding block to HyperDAG for validation and SAGA evaluation...");
     let block_id = candidate_block.id.clone();
-    let dag_writer = dag_arc.write().await;
-    let added = dag_writer.add_block(candidate_block, &utxos_arc).await?;
+    let added = dag_arc.add_block(candidate_block, &utxos_arc).await?;
 
     if added {
         println!("Block {block_id} added to the DAG successfully!");
@@ -176,9 +176,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 7. Process an epoch to see SAGA's autonomous functions
     println!("\n--- Processing Epoch 1 Evolution ---");
-    // FIX: Lock and dereference `current_epoch` to access the `u64` value before adding.
-    let current_epoch = *dag_writer.current_epoch.read().await + 1;
-    saga_pallet.process_epoch_evolution(current_epoch, &dag_writer).await;
+    let current_epoch = *dag_arc.current_epoch.read().await + 1;
+    saga_pallet.process_epoch_evolution(current_epoch, &dag_arc).await;
 
     println!("\n--- Simulation Finished Successfully ---");
 

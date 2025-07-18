@@ -44,6 +44,13 @@ A key innovation in Hyperchain is ΛΣ-ΩMEGA™ (Lambda Sigma Omega), Conscious
 
 This mechanism allows the node to reject potentially harmful actions at a fundamental level, providing a robust defense against sophisticated network attacks. It doesn't protect the system, it becomes the system.
 
+## Infinite Strata Node Mining (ISNM) ☁️
+
+**Infinite Strata Node Mining (ISNM)** is an optional, feature-gated add-on designed to enhance network security and decentralization by incentivizing sustained, resource-committed nodes. It operates on the principle of **Proof-of-Sustained-Cloud-Presence (PoSCP)**, which rewards validators for maintaining long-running nodes with consistent CPU and memory usage, characteristic of dedicated cloud infrastructure.
+
+* **Cloudbound Memory Decay (CMDO):** Nodes that fail to meet minimum resource usage thresholds experience a gradual decay in their potential rewards, disincentivizing ephemeral or under-provisioned validators.
+* **SAGA Integration:** The PoSCP score directly influences the SAGA-calculated block reward, creating a powerful economic incentive for validators to contribute robust, long-term infrastructure to the network.
+* **Enhanced Security:** By favoring dedicated nodes, ISNM helps mitigate transient, low-effort Sybil attacks and strengthens the overall stability of the validator set.
 
 ## SAGA (Sentient Autonomous Governance Algorithm) 🧠
 

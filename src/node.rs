@@ -1,5 +1,7 @@
 //! --- Hyperchain Node Orchestrator ---
-//! v1.3.4 - Corrected Initialization Logic
+//! v1.5.0 - SAGA Integration Hardened
+//! Resolved ISNM feature integration bug by correctly wiring the service
+//! into the SAGA pallet during node initialization.
 
 use crate::config::{Config, ConfigError};
 use crate::hyperdag::{HyperBlock, HyperDAG, HyperDAGError, UTXO};
@@ -42,6 +44,10 @@ use tokio::sync::{mpsc, RwLock};
 use tokio::task::{JoinError, JoinSet};
 use tokio::time::timeout;
 use tracing::{debug, error, info, instrument, warn};
+
+// Import ISNM components when the 'infinite-strata' feature is enabled.
+#[cfg(feature = "infinite-strata")]
+use crate::infinite_strata_node::{InfiniteStrataNode, MIN_UPTIME_HEARTBEAT_SECS};
 
 // Constants defining node limits and validation rules.
 const MAX_UTXOS: usize = 1_000_000;
@@ -138,6 +144,9 @@ pub struct Node {
     pub proposals: Arc<RwLock<Vec<HyperBlock>>>,
     peer_cache_path: String,
     pub saga_pallet: Arc<PalletSaga>,
+    // The ISNM service, conditionally compiled with the 'infinite-strata' feature.
+    #[cfg(feature = "infinite-strata")]
+    isnm_service: Arc<InfiniteStrataNode>,
 }
 
 type DirectApiRateLimiter = RateLimiter<NotKeyed, InMemoryState, QuantaClock>;
@@ -200,16 +209,37 @@ impl Node {
         let signing_key_dalek = wallet.get_signing_key()?;
         let node_signing_key_bytes = signing_key_dalek.to_bytes().to_vec();
 
+        info!("Initializing SAGA and dependent services...");
+
+        // --- FIX: Correctly initialize ISNM service and SAGA pallet ---
+        // Conditionally initialize the ISNM service.
+        #[cfg(feature = "infinite-strata")]
+        let isnm_service = {
+            info!("[ISNM] Infinite Strata feature enabled, initializing service.");
+            Arc::new(InfiniteStrataNode::new())
+        };
+
+        // Initialize the SAGA pallet, conditionally passing the ISNM service.
+        // This corrected logic resolves the build error.
+        let saga_pallet = {
+            #[cfg(feature = "infinite-strata")]
+            {
+                Arc::new(PalletSaga::new(Some(isnm_service.clone())))
+            }
+            #[cfg(not(feature = "infinite-strata"))]
+            {
+                Arc::new(PalletSaga::new())
+            }
+        };
+        // --- End FIX ---
+
         info!("Initializing HyperDAG (loading database)...");
-        let saga_pallet = Arc::new(PalletSaga::new());
         let db = {
             let mut opts = Options::default();
             opts.create_if_missing(true);
             DB::open(&opts, "hyperdag_db_evolved")?
         };
 
-        // FIX: The self-referential initialization is now handled inside HyperDAG::new,
-        // which returns an Arc directly. This simplifies the node's constructor.
         let dag_arc = HyperDAG::new(
             &initial_validator,
             config.target_block_time,
@@ -273,12 +303,40 @@ impl Node {
             proposals,
             peer_cache_path,
             saga_pallet,
+            // Add the isnm_service field to the initializer, gated by the feature flag.
+            #[cfg(feature = "infinite-strata")]
+            isnm_service,
         })
     }
 
     pub async fn start(&self) -> Result<(), NodeError> {
         let (tx_p2p_commands, mut rx_p2p_commands) = mpsc::channel::<P2PCommand>(100);
         let mut join_set: JoinSet<Result<(), NodeError>> = JoinSet::new();
+
+        // --- ISNM Periodic Check Task ---
+        // If the feature is enabled, spawn a background task to run the ISNM heartbeat.
+        #[cfg(feature = "infinite-strata")]
+        {
+            info!("[ISNM] Spawning periodic cloud presence check task.");
+            let isnm_service_clone = self.isnm_service.clone();
+            join_set.spawn(async move {
+                // Give a small delay at startup to avoid resource contention.
+                tokio::time::sleep(Duration::from_secs(10)).await;
+                let mut interval = tokio::time::interval(Duration::from_secs(MIN_UPTIME_HEARTBEAT_SECS));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+                loop {
+                    interval.tick().await;
+                    debug!("[ISNM] Running periodic cloud presence check...");
+                    if let Err(e) = isnm_service_clone.run_periodic_check().await {
+                        warn!("[ISNM] Periodic check failed: {}", e);
+                    }
+                }
+                #[allow(unreachable_code)]
+                Ok(())
+            });
+        }
+        // --- End ISNM Task ---
 
         // --- Command Processor Task ---
         let command_processor_task = {
@@ -448,6 +506,7 @@ impl Node {
                 utxos: self.utxos.clone(),
                 api_address: self.config.api_address.clone(),
                 p2p_command_sender: tx_p2p_commands.clone(),
+                saga: self.saga_pallet.clone(),
             };
             async move {
                 let rate_limiter: Arc<DirectApiRateLimiter> =
@@ -570,6 +629,7 @@ struct AppState {
     utxos: Arc<RwLock<HashMap<String, UTXO>>>,
     api_address: String,
     p2p_command_sender: mpsc::Sender<P2PCommand>,
+    saga: Arc<PalletSaga>,
 }
 
 #[derive(Deserialize)]
@@ -587,7 +647,7 @@ impl IntoResponse for ApiError {
 // --- API Handlers ---
 
 async fn ask_saga(State(state): State<AppState>, Json(payload): Json<SagaQuery>) -> Result<Json<String>, ApiError> {
-    let saga = &state.dag.saga;
+    let saga = &state.saga;
     let network_state = *saga.economy.network_state.read().await;
     let threat_level = crate::omega::get_threat_level().await;
     let proactive_insight = saga.economy.proactive_insights.read().await.first().cloned();
@@ -753,7 +813,7 @@ mod tests {
             difficulty: 1, // Lower difficulty for faster testing
             max_amount: 10_000_000_000,
             use_gpu: false, zk_enabled: false, mining_threads: 1,
-            num_chains: 1, mining_chain_id: 0,
+            num_chains: 1,
             logging: LoggingConfig { level: "debug".to_string(), },
             p2p: P2pConfig::default(),
             network_id: "testnet".to_string(),

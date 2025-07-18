@@ -12,3 +12,6 @@ pub mod saga;
 pub mod transaction;
 pub mod wallet;
 pub mod x_phyrus;
+
+#[cfg(feature = "infinite-strata")]
+pub mod infinite_strata_node;

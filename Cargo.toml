@@ -82,7 +82,7 @@ sysinfo = "0.30.12"
 rayon = "1.10.0"
 zstd = "0.13.1"
 bytes = "1.6.0"
-merkle-cbt = "0.3.2" 
+merkle-cbt = "0.3.2"
 
 # Error handling and CLI
 thiserror = "1.0.61"
@@ -124,6 +124,7 @@ default = []
 gpu = ["ocl"]
 zk = ["bellman", "bls12_381", "ff"]
 ai = ["dep:tch"]
+infinite-strata = []
 
 [lib]
 name = "hyperchain"
