@@ -1,9 +1,19 @@
+//! --- SAGA Simulation v4.0 ---
+//! This simulation tests the advanced features of the SAGA v4.0 pallet, including:
+//! - Dynamic, tiered fee calculation.
+//! - Submission and AI-driven verification of Proof-of-Carbon-Offset credentials.
+//! - SAGA's autonomous epoch evolution process.
+//! - FIX: Corrected the field name from `additionality_proof` to `additionality_proof_hash`
+//!   to match the updated `CarbonOffsetCredential` struct.
+//! - REFACTOR: Updated the fee calculation to call the `calculate_dynamic_fee` method on the
+//!   `saga_pallet` instance, ensuring the simulation uses the live, governable fee logic.
+
 use anyhow::Result;
 use hyperchain::{
     hyperdag::HyperDAG,
     mempool::Mempool,
     saga::{CarbonOffsetCredential, PalletSaga},
-    transaction::{self, Input, Output, Transaction, TransactionConfig},
+    transaction::{Input, Output, Transaction, TransactionConfig},
     wallet::Wallet,
 };
 use rocksdb::{Options, DB};
@@ -14,7 +24,7 @@ use uuid::Uuid;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
-    println!("--- Running Hyperchain Simulation v3 (Dynamic Fees & AI) ---");
+    println!("--- Running Hyperchain Simulation v4 (Evolved SAGA) ---");
 
     // 1. Wallets and Addresses
     let validator_wallet = Wallet::new()?;
@@ -80,7 +90,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let amount_to_send = 1_500_000;
-    let fee = transaction::calculate_dynamic_fee(amount_to_send);
+    // REFACTOR: Use the SAGA pallet to calculate the fee based on its current rules.
+    let fee = saga_pallet.calculate_dynamic_fee(amount_to_send).await;
     println!("Sending {amount_to_send} with dynamically calculated fee of {fee}");
 
     let tx_config = TransactionConfig {
@@ -145,6 +156,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         candidate_block.transactions.len()
     );
 
+    // Add a CarbonOffsetCredential to the block for SAGA to evaluate
     candidate_block
         .carbon_credentials
         .push(CarbonOffsetCredential {
@@ -155,7 +167,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             project_id: "verra-p-981".to_string(),
             vintage_year: 2024,
             verification_signature: "signed_by_verra".to_string(),
-            additionality_proof: "A mock proof statement or hash".to_string(),
+            // FIX: Changed field name to match struct definition
+            additionality_proof_hash: "mock_hash_of_additionality_docs".to_string(),
+            issuer_reputation_score: 0.95,
+            geospatial_consistency_score: 0.98,
         });
 
     // 6. Evaluate the block with SAGA (this happens inside add_block)
@@ -178,5 +193,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n--- Simulation Finished Successfully ---");
 
+    // Cleanup the temporary database
+    DB::destroy(&Options::default(), db_path)?;
     Ok(())
 }
