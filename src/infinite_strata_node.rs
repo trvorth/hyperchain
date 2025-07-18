@@ -121,7 +121,11 @@ impl InfiniteStrataNode {
         Self {
             cloud_state: Arc::new(RwLock::new(CloudPresence::default())),
             sys: Arc::new(RwLock::new(System::new_all())),
-            sentry_nodes: vec!["peer_A".to_string(), "peer_B".to_string(), "peer_C".to_string()],
+            sentry_nodes: vec![
+                "peer_A".to_string(),
+                "peer_B".to_string(),
+                "peer_C".to_string(),
+            ],
             governor: ResourceGovernor::default(),
             slashed_fund_pool: Arc::new(RwLock::new(0)),
             dynamic_distribution_rate: Arc::new(RwLock::new(0.05)), // Start at 5%
@@ -168,15 +172,22 @@ impl InfiniteStrataNode {
 
     /// Simulates probing network sentry nodes to verify connectivity.
     async fn run_network_probes(&self) -> Result<()> {
-        let successful_probes = self.sentry_nodes.iter().filter(|_| thread_rng().gen_bool(0.98)).count();
+        let successful_probes = self
+            .sentry_nodes
+            .iter()
+            .filter(|_| thread_rng().gen_bool(0.98))
+            .count();
         let success_rate = successful_probes as f32 / self.sentry_nodes.len() as f32;
         self.cloud_state.write().await.probe_success_rate = success_rate;
         Ok(())
     }
-    
+
     /// The core heartbeat logic for updating node status, decay, and passport.
     async fn perform_poscp_heartbeat(&self) -> Result<()> {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e| anyhow!("Time error: {}", e))?.as_secs();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|e| anyhow!("Time error: {}", e))?
+            .as_secs();
         let mut state = self.cloud_state.write().await;
 
         if state.last_heartbeat > 0 {
@@ -184,9 +195,9 @@ impl InfiniteStrataNode {
         }
         state.last_heartbeat = now;
 
-        let is_compliant = state.cpu_load_avg >= REQUIRED_CPU_LOAD_PERCENT &&
-                           state.mem_usage_avg >= REQUIRED_MEM_USAGE_PERCENT &&
-                           state.probe_success_rate >= PROBE_SUCCESS_RATE_THRESHOLD;
+        let is_compliant = state.cpu_load_avg >= REQUIRED_CPU_LOAD_PERCENT
+            && state.mem_usage_avg >= REQUIRED_MEM_USAGE_PERCENT
+            && state.probe_success_rate >= PROBE_SUCCESS_RATE_THRESHOLD;
 
         if is_compliant {
             self.handle_compliant_heartbeat(&mut state).await;
@@ -198,22 +209,27 @@ impl InfiniteStrataNode {
         // Read the value needed before the mutable borrow for the history push.
         let current_decay_score = state.decay_score;
         state.score_history.push_back(current_decay_score);
-        
+
         if state.score_history.len() > SCORE_HISTORY_LENGTH {
             state.score_history.pop_front();
         }
-        if let (Some(first), Some(last)) = (state.score_history.front(), state.score_history.back()) {
-            if (first - last) > 0.15 { // A drop of > 15% in 30 mins
+        if let (Some(first), Some(last)) = (state.score_history.front(), state.score_history.back())
+        {
+            if (first - last) > 0.15 {
+                // A drop of > 15% in 30 mins
                 warn!("[ISNM Predictive] Rapid decay detected! Node is at risk of entering a penalized state. Check system load and network connectivity.");
             }
         }
-        
+
         self.update_passport(&state).await;
         debug!(score = state.decay_score, status = ?state.status, "[ISNM] Heartbeat processed.");
         Ok(())
     }
 
-    async fn handle_compliant_heartbeat(&self, state: &mut tokio::sync::RwLockWriteGuard<'_, CloudPresence>) {
+    async fn handle_compliant_heartbeat(
+        &self,
+        state: &mut tokio::sync::RwLockWriteGuard<'_, CloudPresence>,
+    ) {
         state.consecutive_heartbeats_ok += 1;
         match state.status {
             NodeStatus::Probation => {
@@ -222,38 +238,46 @@ impl InfiniteStrataNode {
                     state.status = NodeStatus::Warned;
                     info!("[ISNM] Node has recovered from Probation to Warned status.");
                 }
-            },
+            }
             NodeStatus::Warned if state.consecutive_heartbeats_ok >= 12 => {
                 state.status = NodeStatus::Active;
                 info!("[ISNM] Node has recovered to Active status.");
-            },
+            }
             NodeStatus::Active => {
                 let recovery_factor = (state.consecutive_heartbeats_ok as f64 / 100.0).min(1.0);
                 state.decay_score = (state.decay_score + (0.01 * recovery_factor)).min(1.0);
-            },
+            }
             _ => {}
         }
     }
 
-    async fn handle_non_compliant_heartbeat(&self, state: &mut tokio::sync::RwLockWriteGuard<'_, CloudPresence>) {
-        warn!(cpu = state.cpu_load_avg, mem = state.mem_usage_avg, probe_rate = state.probe_success_rate, "[ISNM] Compliance check failed. Applying decay.");
+    async fn handle_non_compliant_heartbeat(
+        &self,
+        state: &mut tokio::sync::RwLockWriteGuard<'_, CloudPresence>,
+    ) {
+        warn!(
+            cpu = state.cpu_load_avg,
+            mem = state.mem_usage_avg,
+            probe_rate = state.probe_success_rate,
+            "[ISNM] Compliance check failed. Applying decay."
+        );
         state.consecutive_heartbeats_ok = 0;
         let previous_score = state.decay_score;
         state.decay_score *= DECAY_RATE_PER_FAILURE;
-        
+
         let score_lost = previous_score - state.decay_score;
         let slashed_amount = (score_lost * 100.0) as u64; // Simulate 100 HCN per full point of score lost
         self.add_to_slashed_pool(slashed_amount).await;
 
         if state.decay_score < PROBATION_THRESHOLD {
             if state.status != NodeStatus::Probation {
-                 warn!("[ISNM] Node decay score is critical. Entering Probation.");
-                 state.status = NodeStatus::Probation;
-                 state.probation_recovery_clocks = PROBATION_RECOVERY_CLOCKS;
+                warn!("[ISNM] Node decay score is critical. Entering Probation.");
+                state.status = NodeStatus::Probation;
+                state.probation_recovery_clocks = PROBATION_RECOVERY_CLOCKS;
             }
         } else if state.decay_score < WARN_THRESHOLD && state.status == NodeStatus::Active {
-             warn!("[ISNM] Node decay score has dropped. Entering Warned status.");
-             state.status = NodeStatus::Warned;
+            warn!("[ISNM] Node decay score has dropped. Entering Warned status.");
+            state.status = NodeStatus::Warned;
         }
     }
 
@@ -267,8 +291,13 @@ impl InfiniteStrataNode {
             passport.total_uptime_hours = total_hours;
             // Award badges for uptime milestones
             let badge_name = format!("{}-Hour Vigil", total_hours);
-            if !passport.merit_badges.contains(&badge_name) && [24, 100, 500, 1000].contains(&(total_hours as i32)) {
-                info!("[ISNM Passport] Node merit badge '{}' earned. Passport updated.", badge_name);
+            if !passport.merit_badges.contains(&badge_name)
+                && [24, 100, 500, 1000].contains(&(total_hours as i32))
+            {
+                info!(
+                    "[ISNM Passport] Node merit badge '{}' earned. Passport updated.",
+                    badge_name
+                );
                 passport.merit_badges.push(badge_name);
             }
         }
@@ -296,7 +325,7 @@ impl InfiniteStrataNode {
         let mut pool = self.slashed_fund_pool.write().await;
         let distribution_rate = *self.dynamic_distribution_rate.read().await;
         let distributable_amount = (*pool as f64 * distribution_rate) as u64;
-        
+
         let redistributed_reward = if state.status == NodeStatus::Active {
             let reward_share = (distributable_amount as f64 * state.decay_score) as u64;
             *pool = pool.saturating_sub(reward_share);

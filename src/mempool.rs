@@ -111,7 +111,7 @@ impl Mempool {
             None
         }
     }
-    
+
     /// **NEW**: Efficiently removes a slice of transactions from the mempool.
     #[instrument(skip(self, txs_to_remove))]
     pub async fn remove_transactions(&self, txs_to_remove: &[Transaction]) {
@@ -136,7 +136,7 @@ impl Mempool {
             MEMPOOL_SIZE.set(*current_size_bytes_guard as f64);
             MEMPOOL_TRANSACTIONS.set(transactions_guard.len() as f64);
             TRANSACTIONS_REMOVED.inc_by(count_removed);
-            info!("Removed {} transactions included in new block.", count_removed);
+            info!("Removed {count_removed} transactions included in new block.");
         }
     }
 

@@ -243,7 +243,6 @@ impl CredentialVerifierNet {
     }
 }
 
-
 /// A heuristic model to estimate the CO2 impact of a transaction.
 /// This simulates the energy cost based on data size and computational work,
 /// inspired by real-world analysis of blockchain energy consumption.
@@ -267,14 +266,23 @@ impl CarbonImpactPredictor {
         let intent = tx.get_metadata().get("intent").map(|s| s.as_str());
         match intent {
             Some("contract_deployment") => {
-                let code_size = tx.get_metadata().get("contract_code_size").and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+                let code_size = tx
+                    .get_metadata()
+                    .get("contract_code_size")
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .unwrap_or(0.0);
                 total_ecu += ECU_CONTRACT_DEPLOYMENT_BASE + (code_size * ECU_PER_BYTE);
             }
             Some("contract_interaction") => {
-                 let op_count = tx.get_metadata().get("opcode_count").and_then(|s| s.parse::<f64>().ok()).unwrap_or(20.0);
-                 total_ecu += op_count * ECU_PER_CONTRACT_OPCODE;
+                let op_count = tx
+                    .get_metadata()
+                    .get("opcode_count")
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .unwrap_or(20.0);
+                total_ecu += op_count * ECU_PER_CONTRACT_OPCODE;
             }
-            _ => { // Simple value transfer
+            _ => {
+                // Simple value transfer
                 total_ecu += ECU_BASE_TRANSFER;
             }
         };
@@ -282,7 +290,7 @@ impl CarbonImpactPredictor {
         // Network congestion increases energy usage due to propagation and contention.
         let congestion_multiplier = 1.0 + (network_congestion * 0.75);
         let final_ecu = total_ecu * congestion_multiplier;
-        
+
         // Convert ECU to grams of CO2.
         final_ecu * GRAMS_CO2_PER_ECU
     }
@@ -370,10 +378,7 @@ impl CognitiveAnalyticsEngine {
 
         let mut factors = HashMap::new();
 
-        factors.insert(
-            "validity".to_string(),
-            self.check_block_validity(block),
-        );
+        factors.insert("validity".to_string(), self.check_block_validity(block));
         factors.insert(
             "network_contribution".to_string(),
             self.analyze_network_contribution(block, dag).await,
@@ -422,10 +427,9 @@ impl CognitiveAnalyticsEngine {
                         .iter()
                         .map(|&key| *factors.get(key).unwrap_or(&0.5) as f32)
                         .collect();
-                    let features_tensor =
-                        Tensor::from_slice(&feature_vec)
-                            .to_kind(Kind::Float)
-                            .view([1, 8]);
+                    let features_tensor = Tensor::from_slice(&feature_vec)
+                        .to_kind(Kind::Float)
+                        .view([1, 8]);
 
                     let prediction_tensor = model.forward(&features_tensor);
                     // Use softmax to get probabilities for [Malicious, Neutral, Beneficial]
@@ -445,10 +449,7 @@ impl CognitiveAnalyticsEngine {
                 0.5 // Default score if AI is disabled
             }
         };
-        factors.insert(
-            "predicted_behavior".to_string(),
-            predicted_behavior_score,
-        );
+        factors.insert("predicted_behavior".to_string(), predicted_behavior_score);
 
         let mut final_score = 0.0;
         let mut total_weight = 0.0;
@@ -484,12 +485,16 @@ impl CognitiveAnalyticsEngine {
     }
 
     async fn analyze_environmental_contribution(&self, block: &HyperBlock, dag: &HyperDAG) -> f64 {
-        let network_congestion = dag.get_average_tx_per_block().await / MAX_TRANSACTIONS_PER_BLOCK as f64;
+        let network_congestion =
+            dag.get_average_tx_per_block().await / MAX_TRANSACTIONS_PER_BLOCK as f64;
 
         let block_footprint_grams: f64 = block
             .transactions
             .iter()
-            .map(|tx| self.carbon_impact_model.predict_co2_per_tx(tx, network_congestion))
+            .map(|tx| {
+                self.carbon_impact_model
+                    .predict_co2_per_tx(tx, network_congestion)
+            })
             .sum();
         let block_footprint_tonnes = block_footprint_grams / 1_000_000.0;
 
@@ -500,14 +505,16 @@ impl CognitiveAnalyticsEngine {
             .sum();
 
         let net_impact = total_offset_tonnes - block_footprint_tonnes;
-        
+
         // Use a sigmoid function to normalize the score between 0 and 1.
         // A net_impact of 0 gives a score of 0.5. Positive impact trends to 1, negative to 0.
         (1.0 / (1.0 + (-net_impact).exp())).clamp(0.0, 1.0)
     }
 
     fn check_block_validity(&self, block: &HyperBlock) -> f64 {
-        let Some(coinbase) = block.transactions.first() else { return 0.0; };
+        let Some(coinbase) = block.transactions.first() else {
+            return 0.0;
+        };
         if !coinbase.is_coinbase() {
             return 0.1;
         }
@@ -605,13 +612,17 @@ impl CognitiveAnalyticsEngine {
         let tx_count = block.transactions.len().max(1) as f64;
         let mut suspicious_tx_count = 0.0;
 
-        for tx in block.transactions.iter().skip(1) { // Skip coinbase
+        for tx in block.transactions.iter().skip(1) {
+            // Skip coinbase
             let metadata = tx.get_metadata();
-            if metadata.get("origin_component").map_or(true, |s| s.is_empty() || s == "unknown") {
+            if metadata
+                .get("origin_component")
+                .is_none_or(|s| s.is_empty() || s == "unknown")
+            {
                 suspicious_tx_count += 0.5;
             }
 
-            if metadata.get("intent").map_or(true, |s| s.is_empty()) {
+            if metadata.get("intent").is_none_or(|s| s.is_empty()) {
                 suspicious_tx_count += 1.0;
             }
 
@@ -635,10 +646,15 @@ impl CognitiveAnalyticsEngine {
             .await
             .unwrap_or_default();
         let congestion_metric = self.analyze_network_contribution(block, dag).await;
-        
+
         // Heuristic labeling: was the block eventually part of the main chain or orphaned?
         // This is a simplification; a real system might use finalization status.
-        let is_orphaned = !dag.tips.read().await.values().any(|tips| tips.contains(&block.id)) 
+        let is_orphaned = !dag
+            .tips
+            .read()
+            .await
+            .values()
+            .any(|tips| tips.contains(&block.id))
             && dag.blocks.read().await.len() > 50;
 
         let behavior_label = if is_orphaned {
@@ -648,16 +664,44 @@ impl CognitiveAnalyticsEngine {
         } else {
             0.5 // Neutral
         };
-        
+
         let data_point = ModelTrainingData {
             validity: breakdown.factors.get("validity").cloned().unwrap_or(0.0),
-            network_contribution: breakdown.factors.get("network_contribution").cloned().unwrap_or(0.0),
-            historical_performance: breakdown.factors.get("historical_performance").cloned().unwrap_or(0.0),
-            cognitive_hazard: breakdown.factors.get("cognitive_hazard").cloned().unwrap_or(0.0),
-            temporal_consistency: breakdown.factors.get("temporal_consistency").cloned().unwrap_or(0.0),
-            cognitive_dissonance: breakdown.factors.get("cognitive_dissonance").cloned().unwrap_or(0.0),
-            metadata_integrity: breakdown.factors.get("metadata_integrity").cloned().unwrap_or(0.0),
-            environmental_contribution: breakdown.factors.get("environmental_contribution").cloned().unwrap_or(0.0),
+            network_contribution: breakdown
+                .factors
+                .get("network_contribution")
+                .cloned()
+                .unwrap_or(0.0),
+            historical_performance: breakdown
+                .factors
+                .get("historical_performance")
+                .cloned()
+                .unwrap_or(0.0),
+            cognitive_hazard: breakdown
+                .factors
+                .get("cognitive_hazard")
+                .cloned()
+                .unwrap_or(0.0),
+            temporal_consistency: breakdown
+                .factors
+                .get("temporal_consistency")
+                .cloned()
+                .unwrap_or(0.0),
+            cognitive_dissonance: breakdown
+                .factors
+                .get("cognitive_dissonance")
+                .cloned()
+                .unwrap_or(0.0),
+            metadata_integrity: breakdown
+                .factors
+                .get("metadata_integrity")
+                .cloned()
+                .unwrap_or(0.0),
+            environmental_contribution: breakdown
+                .factors
+                .get("environmental_contribution")
+                .cloned()
+                .unwrap_or(0.0),
             behavior_label,
             congestion_metric,
         };
@@ -677,32 +721,54 @@ impl CognitiveAnalyticsEngine {
 
         // --- Train BehaviorNet ---
         if let Some(model) = &mut self.behavior_model {
-            let features: Vec<f32> = self.training_data.iter().flat_map(|d| {
-                vec![
-                    d.validity as f32, d.network_contribution as f32,
-                    d.historical_performance as f32, d.cognitive_hazard as f32,
-                    d.temporal_consistency as f32, d.cognitive_dissonance as f32,
-                    d.metadata_integrity as f32, d.environmental_contribution as f32,
-                ]
-            }).collect();
-            
+            let features: Vec<f32> = self
+                .training_data
+                .iter()
+                .flat_map(|d| {
+                    vec![
+                        d.validity as f32,
+                        d.network_contribution as f32,
+                        d.historical_performance as f32,
+                        d.cognitive_hazard as f32,
+                        d.temporal_consistency as f32,
+                        d.cognitive_dissonance as f32,
+                        d.metadata_integrity as f32,
+                        d.environmental_contribution as f32,
+                    ]
+                })
+                .collect();
+
             // Labels for 3 classes: 0 (Malicious), 1 (Neutral), 2 (Beneficial)
-            let labels: Vec<i64> = self.training_data.iter().map(|d| 
-                if d.behavior_label == 1.0 { 2 } 
-                else if d.behavior_label == 0.0 { 0 } 
-                else { 1 }
-            ).collect();
+            let labels: Vec<i64> = self
+                .training_data
+                .iter()
+                .map(|d| {
+                    if d.behavior_label == 1.0 {
+                        2
+                    } else if d.behavior_label == 0.0 {
+                        0
+                    } else {
+                        1
+                    }
+                })
+                .collect();
 
             let feature_tensor = Tensor::of_slice(&features).view([-1, 8]);
             let label_tensor = Tensor::of_slice(&labels);
             let mut opt = nn::Adam::default().build(&model.vs, 1e-4).unwrap();
-            
+
             info!("SAGA: Simulating BehaviorNet training for 50 epochs...");
             for i in 1..=50 {
-                let loss = model.forward(&feature_tensor).cross_entropy_for_logits(&label_tensor);
+                let loss = model
+                    .forward(&feature_tensor)
+                    .cross_entropy_for_logits(&label_tensor);
                 opt.backward_step(&loss);
                 if i % 10 == 0 {
-                    debug!("Simulated BehaviorNet Training Epoch: {}, Loss: {:?}", i, f64::from(&loss));
+                    debug!(
+                        "Simulated BehaviorNet Training Epoch: {}, Loss: {:?}",
+                        i,
+                        f64::from(&loss)
+                    );
                 }
             }
             info!("SAGA: BehaviorNet model training simulation complete.");
@@ -711,7 +777,7 @@ impl CognitiveAnalyticsEngine {
         // --- Train CongestionPredictorLSTM ---
         // (Conceptual simulation - full implementation would be more complex)
         info!("SAGA: CongestionPredictorLSTM training is conceptually similar and simulated as complete.");
-        
+
         // --- Train CredentialVerifierNet ---
         // (Conceptual simulation)
         info!("SAGA: CredentialVerifierNet training is conceptually similar and simulated as complete.");
@@ -727,17 +793,26 @@ impl CognitiveAnalyticsEngine {
             .map_err(|e| SagaError::ModelFileError(e.to_string()))?;
         if let Some(model) = &self.behavior_model {
             let path = PathBuf::from(MODEL_SAVE_PATH).join(BEHAVIOR_MODEL_FILENAME);
-            model.vs.save(&path).map_err(|e| SagaError::ModelFileError(e.to_string()))?;
+            model
+                .vs
+                .save(&path)
+                .map_err(|e| SagaError::ModelFileError(e.to_string()))?;
             info!("SAGA: BehaviorNet model saved to {:?}", path);
         }
         if let Some(model) = &self.congestion_model {
             let path = PathBuf::from(MODEL_SAVE_PATH).join(CONGESTION_MODEL_FILENAME);
-            model.vs.save(&path).map_err(|e| SagaError::ModelFileError(e.to_string()))?;
+            model
+                .vs
+                .save(&path)
+                .map_err(|e| SagaError::ModelFileError(e.to_string()))?;
             info!("SAGA: CongestionPredictorLSTM model saved to {:?}", path);
         }
         if let Some(model) = &self.credential_verifier_model {
             let path = PathBuf::from(MODEL_SAVE_PATH).join(CREDENTIAL_MODEL_FILENAME);
-            model.vs.save(&path).map_err(|e| SagaError::ModelFileError(e.to_string()))?;
+            model
+                .vs
+                .save(&path)
+                .map_err(|e| SagaError::ModelFileError(e.to_string()))?;
             info!("SAGA: CredentialVerifierNet model saved to {:?}", path);
         }
         Ok(())
@@ -748,21 +823,30 @@ impl CognitiveAnalyticsEngine {
         if let Some(model) = &self.behavior_model {
             let path = PathBuf::from(MODEL_SAVE_PATH).join(BEHAVIOR_MODEL_FILENAME);
             if path.exists() {
-                model.vs.load(&path).map_err(|e| SagaError::ModelFileError(e.to_string()))?;
+                model
+                    .vs
+                    .load(&path)
+                    .map_err(|e| SagaError::ModelFileError(e.to_string()))?;
                 info!("SAGA: Loaded BehaviorNet model from {:?}", path);
             }
         }
         if let Some(model) = &self.congestion_model {
             let path = PathBuf::from(MODEL_SAVE_PATH).join(CONGESTION_MODEL_FILENAME);
             if path.exists() {
-                model.vs.load(&path).map_err(|e| SagaError::ModelFileError(e.to_string()))?;
+                model
+                    .vs
+                    .load(&path)
+                    .map_err(|e| SagaError::ModelFileError(e.to_string()))?;
                 info!("SAGA: Loaded CongestionPredictorLSTM model from {:?}", path);
             }
         }
         if let Some(model) = &self.credential_verifier_model {
             let path = PathBuf::from(MODEL_SAVE_PATH).join(CREDENTIAL_MODEL_FILENAME);
             if path.exists() {
-                model.vs.load(&path).map_err(|e| SagaError::ModelFileError(e.to_string()))?;
+                model
+                    .vs
+                    .load(&path)
+                    .map_err(|e| SagaError::ModelFileError(e.to_string()))?;
                 info!("SAGA: Loaded CredentialVerifierNet model from {:?}", path);
             }
         }
@@ -774,7 +858,9 @@ impl CognitiveAnalyticsEngine {
 pub struct PredictiveEconomicModel;
 
 impl PredictiveEconomicModel {
-    pub fn new() -> Self { Self {} }
+    pub fn new() -> Self {
+        Self {}
+    }
     pub async fn predictive_market_premium(
         &self,
         dag: &HyperDAG,
@@ -782,18 +868,25 @@ impl PredictiveEconomicModel {
     ) -> f64 {
         let avg_tx_per_block = dag.get_average_tx_per_block().await;
         let validator_count = dag.validators.read().await.len() as f64;
-        
+
         let fee_velocity: f64 = {
             let blocks_reader = dag.blocks.read().await;
-            let recent_blocks: Vec<_> = blocks_reader.values()
+            let recent_blocks: Vec<_> = blocks_reader
+                .values()
                 .filter(|b| !b.transactions.is_empty())
                 .collect();
-            if recent_blocks.is_empty() { 1.0 } else {
-                let total_fees: u64 = recent_blocks.iter()
+            if recent_blocks.is_empty() {
+                1.0
+            } else {
+                let total_fees: u64 = recent_blocks
+                    .iter()
                     .flat_map(|b| &b.transactions)
                     .map(|tx| tx.fee)
                     .sum();
-                let total_txs = recent_blocks.iter().map(|b| b.transactions.len()).sum::<usize>();
+                let total_txs = recent_blocks
+                    .iter()
+                    .map(|b| b.transactions.len())
+                    .sum::<usize>();
                 (total_fees as f64 / total_txs.max(1) as f64).max(1.0)
             }
         };
@@ -802,10 +895,11 @@ impl PredictiveEconomicModel {
         let green_premium = 1.0 + (green_score * 0.15); // Increased incentive for being green
 
         let base_premium = 1.0;
-        let demand_factor = (avg_tx_per_block / MAX_TRANSACTIONS_PER_BLOCK as f64) * (1.0 + (fee_velocity / 100.0).min(1.0));
+        let demand_factor = (avg_tx_per_block / MAX_TRANSACTIONS_PER_BLOCK as f64)
+            * (1.0 + (fee_velocity / 100.0).min(1.0));
         let security_factor = (1.0 - (10.0 / validator_count).min(1.0)).max(0.5);
         let premium = base_premium + demand_factor * security_factor;
-        
+
         (premium * green_premium).clamp(0.8, 2.5) // Allow for higher premium
     }
 }
@@ -874,33 +968,48 @@ impl SagaGuidanceSystem {
         knowledge_base.insert("poco".to_string(), "Proof-of-Carbon-Offset (PoCO) is Hyperchain's innovative mechanism for integrating real-world environmental action into the blockchain consensus.\n- **How it Works:** Validators can include special `CarbonOffsetCredential` data in the blocks they mine. These credentials are verifiable claims of CO2 sequestration from trusted, off-chain issuers.\n- **Benefits:** SAGA's Cognitive Engine analyzes these credentials. Miners who include valid, high-quality credentials in their blocks receive a boost to their 'environmental_contribution' score. This, in turn, improves their overall Saga Credit Score (SCS), leading to higher block rewards.\n- **Goal:** PoCO creates a direct financial incentive for network participants to fund and support carbon reduction projects, turning the blockchain into a tool for positive environmental impact.".to_string());
         knowledge_base.insert("carbon_credit".to_string(), "A carbon credit is a tradable certificate representing the removal of one tonne of CO2. In Hyperchain's PoCO system, a `CarbonOffsetCredential` is the on-chain representation of such a credit. To be accepted, it must come from a project on SAGA's trusted registry and pass verification, which now includes an AI confidence check. Including valid credentials in a block proves a miner has sponsored real-world climate action, and SAGA rewards them for this contribution with an improved SCS and higher potential earnings.".to_string());
         knowledge_base.insert("centralization_risk".to_string(), "Centralization is a key risk where a few miners control a majority of block production. SAGA's Security Monitor calculates this risk using the Herfindahl-Hirschman Index (HHI) on block producer statistics from the last epoch. A high HHI score indicates high market concentration and increases the 'centralization_risk'. If the risk is too high, SAGA may enter an 'UnderAttack' state and could autonomously propose changes to encourage more miners to participate.".to_string());
-        
-        Self { 
+
+        Self {
             knowledge_base,
-            #[cfg(feature="ai")]
+            #[cfg(feature = "ai")]
             topic_embeddings: Self::generate_mock_embeddings(),
         }
     }
 
-    #[cfg(feature="ai")]
+    #[cfg(feature = "ai")]
     fn generate_mock_embeddings() -> HashMap<String, Vec<f32>> {
         // This is a placeholder. A real system would use a pre-trained language model
         // like BERT or Sentence-Transformers to generate these embeddings.
         HashMap::from([
             ("setup".to_string(), vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
-            ("staking".to_string(), vec![0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+            (
+                "staking".to_string(),
+                vec![0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            ),
             ("send".to_string(), vec![0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0]),
             ("saga".to_string(), vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]),
-            ("tokenomics".to_string(), vec![0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0]),
+            (
+                "tokenomics".to_string(),
+                vec![0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            ),
             ("scs".to_string(), vec![0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0]),
-            ("security".to_string(), vec![0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            (
+                "security".to_string(),
+                vec![0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+            ),
             ("poco".to_string(), vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]),
-            ("carbon_credit".to_string(), vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]),
-            ("centralization_risk".to_string(), vec![0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.5]),
+            (
+                "carbon_credit".to_string(),
+                vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+            ),
+            (
+                "centralization_risk".to_string(),
+                vec![0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.5],
+            ),
         ])
     }
-    
-    #[cfg(feature="ai")]
+
+    #[cfg(feature = "ai")]
     fn get_query_embedding(query: &str, topic_keywords: &HashMap<&str, Vec<&str>>) -> Vec<f32> {
         let mut embedding = vec![0.0; 7];
         for (topic, keywords) in topic_keywords {
@@ -946,8 +1055,15 @@ impl SagaGuidanceSystem {
                     .knowledge_base
                     .get(&analyzed_query.primary_topic)
                     .unwrap_or(&not_found_str);
-                let entity_key = analyzed_query.entities.first().unwrap_or(&"".to_string()).clone();
-                let topic2_content = self.knowledge_base.get(&entity_key).unwrap_or(&not_found_str);
+                let entity_key = analyzed_query
+                    .entities
+                    .first()
+                    .unwrap_or(&"".to_string())
+                    .clone();
+                let topic2_content = self
+                    .knowledge_base
+                    .get(&entity_key)
+                    .unwrap_or(&not_found_str);
                 format!(
                     "**Comparing {} and {}:**\n\n**{}:** {}\n\n**{}:** {}",
                     analyzed_query.primary_topic.to_uppercase(),
@@ -993,65 +1109,111 @@ impl SagaGuidanceSystem {
             QueryIntent::GetInfo
         };
 
-        #[cfg(not(feature="ai"))]
+        #[cfg(not(feature = "ai"))]
         {
             let topic_keywords: HashMap<&str, Vec<&str>> = HashMap::from([
                 ("scs", vec!["scs", "score", "reputation"]),
-                ("tokenomics", vec!["token", "hcn", "economy", "reward", "fee", "tokenomics"]),
+                (
+                    "tokenomics",
+                    vec!["token", "hcn", "economy", "reward", "fee", "tokenomics"],
+                ),
                 ("staking", vec!["stake", "staking", "validator"]),
-                ("poco", vec!["poco", "offset", "environment", "carbon", "co2", "credit", "green"]),
+                (
+                    "poco",
+                    vec![
+                        "poco",
+                        "offset",
+                        "environment",
+                        "carbon",
+                        "co2",
+                        "credit",
+                        "green",
+                    ],
+                ),
                 // Add more basic keyword mappings here
             ]);
             let mut best_topic = None;
             let mut max_score = 0;
             for (topic, keywords) in topic_keywords {
-                 let score = keywords.iter().filter(|k| q.contains(*k)).count();
-                 if score > max_score {
-                     max_score = score;
-                     best_topic = Some(topic.to_string());
-                 }
+                let score = keywords.iter().filter(|k| q.contains(*k)).count();
+                if score > max_score {
+                    max_score = score;
+                    best_topic = Some(topic.to_string());
+                }
             }
             if let Some(topic) = best_topic {
-                return Ok(AnalyzedQuery { intent, primary_topic: topic, entities: vec![] });
+                Ok(AnalyzedQuery {
+                    intent,
+                    primary_topic: topic,
+                    entities: vec![],
+                })
             } else {
-                 return Err(SagaError::AmbiguousQuery(vec![]));
+                Err(SagaError::AmbiguousQuery(vec![]))
             }
         }
 
-        #[cfg(feature="ai")]
+        #[cfg(feature = "ai")]
         {
             let topic_keywords: HashMap<&str, Vec<&str>> = HashMap::from([
                 ("setup", vec!["setup", "start", "install", "config", "init"]),
                 ("staking", vec!["stake", "staking", "validator"]),
-                ("send", vec!["send", "utxo", "construct", "submit", "transaction"]),
-                ("saga", vec!["saga", "ai", "governance", "proposal", "brain"]),
-                ("tokenomics", vec!["token", "hcn", "economy", "reward", "fee", "tokenomics"]),
+                (
+                    "send",
+                    vec!["send", "utxo", "construct", "submit", "transaction"],
+                ),
+                (
+                    "saga",
+                    vec!["saga", "ai", "governance", "proposal", "brain"],
+                ),
+                (
+                    "tokenomics",
+                    vec!["token", "hcn", "economy", "reward", "fee", "tokenomics"],
+                ),
                 ("scs", vec!["scs", "score", "reputation"]),
                 ("slashing", vec!["slash", "slashing", "penalty", "offline"]),
                 ("karma", vec!["karma", "contribution"]),
                 ("mempool", vec!["mempool", "memory pool"]),
-                ("peers", vec!["peer", "peers", "connect", "dial", "firewall"]),
+                (
+                    "peers",
+                    vec!["peer", "peers", "connect", "dial", "firewall"],
+                ),
                 ("stuck_tx", vec!["stuck", "pending", "unconfirmed"]),
-                ("security", vec!["security", "safe", "wallet", "key", "phishing", "attack"]),
+                (
+                    "security",
+                    vec!["security", "safe", "wallet", "key", "phishing", "attack"],
+                ),
                 ("ai_training", vec!["train", "training", "model", "learn"]),
                 ("sybil_attack", vec!["sybil"]),
                 ("spam_attack", vec!["spam"]),
                 ("poco", vec!["poco", "offset", "environment"]),
                 ("carbon_credit", vec!["carbon", "co2", "credit", "green"]),
-                ("centralization_risk", vec!["centralization", "hhi", "concentration"]),
+                (
+                    "centralization_risk",
+                    vec!["centralization", "hhi", "concentration"],
+                ),
             ]);
 
             let query_embedding = Self::get_query_embedding(&q, &topic_keywords);
 
-            let mut scores: Vec<(String, f32)> = self.topic_embeddings.iter().map(|(topic, topic_emb)| {
-                let dot_product = query_embedding.iter().zip(topic_emb.iter()).map(|(a, b)| a * b).sum();
-                (topic.clone(), dot_product)
-            }).collect();
-            
+            let mut scores: Vec<(String, f32)> = self
+                .topic_embeddings
+                .iter()
+                .map(|(topic, topic_emb)| {
+                    let dot_product = query_embedding
+                        .iter()
+                        .zip(topic_emb.iter())
+                        .map(|(a, b)| a * b)
+                        .sum();
+                    (topic.clone(), dot_product)
+                })
+                .collect();
+
             scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-            
+
             if scores.is_empty() || scores[0].1 < 0.1 {
-                return Err(SagaError::AmbiguousQuery(scores.iter().map(|(t, _)| t.clone()).take(3).collect()));
+                return Err(SagaError::AmbiguousQuery(
+                    scores.iter().map(|(t, _)| t.clone()).take(3).collect(),
+                ));
             }
 
             let primary_topic = scores[0].0.clone();
@@ -1064,7 +1226,7 @@ impl SagaGuidanceSystem {
                     return Err(SagaError::AmbiguousQuery(vec![primary_topic]));
                 }
             }
-            
+
             Ok(AnalyzedQuery {
                 intent,
                 primary_topic,
@@ -1145,7 +1307,7 @@ impl SecurityMonitor {
             .flat_map(|b| &b.transactions[1..])
             .filter(|tx| tx.fee == 0)
             .count();
-        
+
         let zero_fee_ratio = zero_fee_txs as f64 / total_txs as f64;
         let risk = zero_fee_ratio.powi(2);
 
@@ -1159,33 +1321,45 @@ impl SecurityMonitor {
     #[instrument(skip(self, dag, epoch_lookback))]
     pub async fn check_for_centralization_risk(&self, dag: &HyperDAG, epoch_lookback: u64) -> f64 {
         let blocks = dag.blocks.read().await;
-        if blocks.len() < 50 { return 0.0; }
+        if blocks.len() < 50 {
+            return 0.0;
+        }
 
         let current_epoch_val = *dag.current_epoch.read().await;
-        
-        let recent_blocks_by_miner: HashMap<String, u64> = blocks.values()
+
+        let recent_blocks_by_miner: HashMap<String, u64> = blocks
+            .values()
             .filter(|b| b.epoch >= current_epoch_val.saturating_sub(epoch_lookback))
             .fold(HashMap::new(), |mut acc, b| {
                 *acc.entry(b.miner.clone()).or_insert(0) += 1;
                 acc
             });
 
-        if recent_blocks_by_miner.len() < 3 { return 0.75; }
+        if recent_blocks_by_miner.len() < 3 {
+            return 0.75;
+        }
 
         let total_produced = recent_blocks_by_miner.values().sum::<u64>() as f64;
-        if total_produced == 0.0 { return 0.0; }
-        
+        if total_produced == 0.0 {
+            return 0.0;
+        }
+
         // Using Herfindahl-Hirschman Index (HHI) for market concentration
-        let hhi = recent_blocks_by_miner.values()
+        let hhi = recent_blocks_by_miner
+            .values()
             .map(|&count| {
                 let share = (count as f64 / total_produced) * 100.0;
                 share.powi(2)
-            }).sum::<f64>();
+            })
+            .sum::<f64>();
 
         // HHI between 1500 and 2500 is moderately concentrated, > 2500 is highly concentrated.
         let risk = ((hhi - 1500.0).max(0.0) / (4000.0 - 1500.0)).clamp(0.0, 1.0);
 
-        debug!("Centralization risk analysis complete. HHI: {:.2}, Risk Score: {:.4}", hhi, risk);
+        debug!(
+            "Centralization risk analysis complete. HHI: {:.2}, Risk Score: {:.4}",
+            hhi, risk
+        );
         risk
     }
 
@@ -1202,16 +1376,26 @@ impl SecurityMonitor {
 
         let mut creds_by_miner = HashMap::<String, Vec<CarbonOffsetCredential>>::new();
         for block in recent_blocks {
-            creds_by_miner.entry(block.miner.clone()).or_default().extend(block.carbon_credentials.clone());
+            creds_by_miner
+                .entry(block.miner.clone())
+                .or_default()
+                .extend(block.carbon_credentials.clone());
         }
 
-        if creds_by_miner.is_empty() { return 0.0; }
+        if creds_by_miner.is_empty() {
+            return 0.0;
+        }
 
         let mut total_risk_score = 0.0;
-        let num_miners_with_creds = creds_by_miner.values().filter(|creds| !creds.is_empty()).count();
+        let num_miners_with_creds = creds_by_miner
+            .values()
+            .filter(|creds| !creds.is_empty())
+            .count();
 
         for (_miner, creds) in creds_by_miner.iter() {
-            if creds.is_empty() { continue; }
+            if creds.is_empty() {
+                continue;
+            }
 
             let mut project_counts = HashMap::<String, u32>::new();
             for cred in creds {
@@ -1225,7 +1409,7 @@ impl SecurityMonitor {
                 }
             }
         }
-        
+
         (total_risk_score / num_miners_with_creds.max(1) as f64).clamp(0.0, 1.0)
     }
 
@@ -1234,18 +1418,23 @@ impl SecurityMonitor {
         // Looks for miners who consistently produce blocks with the minimum possible timestamp,
         // which can be an indicator of selfish mining or network manipulation attempts.
         let blocks = dag.blocks.read().await;
-        
+
         let mut recent_blocks: Vec<_> = blocks.values().collect();
         recent_blocks.sort_by_key(|b| b.timestamp);
-        
+
         let mut suspicious_timestamps = HashMap::<String, (u32, u32)>::new(); // (total_blocks, suspicious_blocks)
-        
+
         for block in recent_blocks.iter().rev().take(200) {
-            let parent_max_ts = block.parents.iter()
+            let parent_max_ts = block
+                .parents
+                .iter()
                 .filter_map(|p_id| blocks.get(p_id).map(|p| p.timestamp))
-                .max().unwrap_or(block.timestamp);
-            
-            let (count, suspicious_count) = suspicious_timestamps.entry(block.miner.clone()).or_insert((0, 0));
+                .max()
+                .unwrap_or(block.timestamp);
+
+            let (count, suspicious_count) = suspicious_timestamps
+                .entry(block.miner.clone())
+                .or_insert((0, 0));
             *count += 1;
 
             // A "suspicious" timestamp is one that is only 1 or 2 seconds after its parent.
@@ -1254,27 +1443,38 @@ impl SecurityMonitor {
                 *suspicious_count += 1;
             }
         }
-        
+
         let mut max_risk = 0.0;
         for (_miner, (count, suspicious_count)) in suspicious_timestamps {
-            if count > 10 { // Only consider miners with a decent sample size
+            if count > 10 {
+                // Only consider miners with a decent sample size
                 let ratio = suspicious_count as f64 / count as f64;
                 if ratio > max_risk {
                     max_risk = ratio;
                 }
             }
         }
-        
+
         (max_risk.powi(2)).clamp(0.0, 1.0)
     }
 
     #[instrument(skip(self, dag))]
     pub async fn check_for_wash_trading(&self, dag: &HyperDAG) -> f64 {
         let blocks = dag.blocks.read().await;
-        if blocks.len() < 100 { return 0.0; } // Need sufficient history
+        if blocks.len() < 100 {
+            return 0.0;
+        } // Need sufficient history
 
-        let recent_blocks: Vec<_> = blocks.values()
-            .filter(|b| b.timestamp > SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs().saturating_sub(1800)) // last 30 mins
+        let recent_blocks: Vec<_> = blocks
+            .values()
+            .filter(|b| {
+                b.timestamp
+                    > SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs()
+                        .saturating_sub(1800)
+            }) // last 30 mins
             .collect();
 
         let mut tx_graph = HashMap::<String, Vec<String>>::new();
@@ -1290,20 +1490,26 @@ impl SecurityMonitor {
 
         for block in recent_blocks {
             for tx in &block.transactions {
-                if tx.is_coinbase() || tx.inputs.is_empty() { continue; }
-                
+                if tx.is_coinbase() || tx.inputs.is_empty() {
+                    continue;
+                }
+
                 // Simplified: assume first input is the primary sender
                 let input = &tx.inputs[0];
-                
+
                 // FIX: Look up the source transaction output to get the sender's address.
                 // The `Input` type does not contain an address directly.
                 if let Some(source_tx) = tx_map.get(&input.tx_id) {
-                    if let Some(source_output) = source_tx.outputs.get(input.output_index as usize) {
+                    if let Some(source_output) = source_tx.outputs.get(input.output_index as usize)
+                    {
                         let input_addr = &source_output.address;
 
                         for output in &tx.outputs {
                             let output_addr = &output.address;
-                            tx_graph.entry(input_addr.clone()).or_default().push(output_addr.clone());
+                            tx_graph
+                                .entry(input_addr.clone())
+                                .or_default()
+                                .push(output_addr.clone());
                             *address_tx_counts.entry(input_addr.clone()).or_insert(0) += 1;
                             *address_tx_counts.entry(output_addr.clone()).or_insert(0) += 1;
                         }
@@ -1315,7 +1521,9 @@ impl SecurityMonitor {
         let mut suspicious_cycles = 0;
         let mut total_txs = 0;
         for (start_node, count) in address_tx_counts.iter() {
-            if *count < 4 { continue; } // Ignore addresses with few txs
+            if *count < 4 {
+                continue;
+            } // Ignore addresses with few txs
             total_txs += count;
             // Simple cycle detection: A -> B -> A
             if let Some(neighbors) = tx_graph.get(start_node) {
@@ -1329,9 +1537,14 @@ impl SecurityMonitor {
             }
         }
 
-        if total_txs == 0 { return 0.0; }
+        if total_txs == 0 {
+            return 0.0;
+        }
         let risk = (suspicious_cycles as f64 / total_txs as f64).clamp(0.0, 1.0);
-        debug!("Wash trading analysis complete. Suspicious cycles: {}, Risk Score: {:.4}", suspicious_cycles, risk);
+        debug!(
+            "Wash trading analysis complete. Suspicious cycles: {}, Risk Score: {:.4}",
+            suspicious_cycles, risk
+        );
         risk
     }
 }
@@ -1447,6 +1660,15 @@ pub struct PalletSaga {
     pub isnm_service: Option<Arc<InfiniteStrataNode>>,
 }
 
+impl Default for PalletSaga {
+    fn default() -> Self {
+        Self::new(
+            #[cfg(feature = "infinite-strata")]
+            None,
+        )
+    }
+}
+
 impl PalletSaga {
     // Modify the constructor to accept the optional ISNM service.
     // This resolves the compilation error in node.rs and saga_simulation.rs.
@@ -1455,59 +1677,277 @@ impl PalletSaga {
     ) -> Self {
         let mut rules = HashMap::new();
         // --- Core ---
-        rules.insert("base_difficulty".to_string(), EpochRule { value: 10.0, description: "The baseline PoW difficulty before PoSe adjustments.".to_string() });
-        rules.insert("min_validator_stake".to_string(), EpochRule { value: 1000.0, description: "The minimum stake required to be a validator.".to_string() });
-        
+        rules.insert(
+            "base_difficulty".to_string(),
+            EpochRule {
+                value: 10.0,
+                description: "The baseline PoW difficulty before PoSe adjustments.".to_string(),
+            },
+        );
+        rules.insert(
+            "min_validator_stake".to_string(),
+            EpochRule {
+                value: 1000.0,
+                description: "The minimum stake required to be a validator.".to_string(),
+            },
+        );
+
         // --- SCS Weights ---
-        rules.insert("scs_trust_weight".to_string(), EpochRule { value: 0.55, description: "Weight of Cognitive Engine score in SCS.".to_string() });
-        rules.insert("scs_karma_weight".to_string(), EpochRule { value: 0.2, description: "Weight of Karma in SCS.".to_string() });
-        rules.insert("scs_stake_weight".to_string(), EpochRule { value: 0.2, description: "Weight of raw stake in SCS.".to_string() });
-        rules.insert("scs_environmental_weight".to_string(), EpochRule { value: 0.05, description: "Weight of environmental contribution in SCS.".to_string() });
-        
+        rules.insert(
+            "scs_trust_weight".to_string(),
+            EpochRule {
+                value: 0.55,
+                description: "Weight of Cognitive Engine score in SCS.".to_string(),
+            },
+        );
+        rules.insert(
+            "scs_karma_weight".to_string(),
+            EpochRule {
+                value: 0.2,
+                description: "Weight of Karma in SCS.".to_string(),
+            },
+        );
+        rules.insert(
+            "scs_stake_weight".to_string(),
+            EpochRule {
+                value: 0.2,
+                description: "Weight of raw stake in SCS.".to_string(),
+            },
+        );
+        rules.insert(
+            "scs_environmental_weight".to_string(),
+            EpochRule {
+                value: 0.05,
+                description: "Weight of environmental contribution in SCS.".to_string(),
+            },
+        );
+
         // --- Trust Score Weights ---
-        rules.insert("trust_validity_weight".to_string(), EpochRule { value: 0.20, description: "Weight of block validity in trust score.".to_string() });
-        rules.insert("trust_network_contribution_weight".to_string(), EpochRule { value: 0.10, description: "Weight of network contribution in trust score.".to_string() });
-        rules.insert("trust_historical_performance_weight".to_string(), EpochRule { value: 0.10, description: "Weight of historical performance in trust score.".to_string() });
-        rules.insert("trust_cognitive_hazard_weight".to_string(), EpochRule { value: 0.15, description: "Weight of cognitive hazard analysis in trust score.".to_string() });
-        rules.insert("trust_temporal_consistency_weight".to_string(), EpochRule { value: 0.15, description: "Weight of temporal consistency in trust score.".to_string() });
-        rules.insert("trust_cognitive_dissonance_weight".to_string(), EpochRule { value: 0.10, description: "Weight of cognitive dissonance in trust score.".to_string() });
-        rules.insert("trust_metadata_integrity_weight".to_string(), EpochRule { value: 0.10, description: "Weight of transaction metadata integrity in trust score.".to_string() });
-        rules.insert("trust_predicted_behavior_weight".to_string(), EpochRule { value: 0.10, description: "Weight of AI behavioral prediction in trust score.".to_string() });
-        rules.insert("trust_environmental_contribution_weight".to_string(), EpochRule { value: 0.10, description: "Weight of PoCO score in trust score.".to_string() });
-        
+        rules.insert(
+            "trust_validity_weight".to_string(),
+            EpochRule {
+                value: 0.20,
+                description: "Weight of block validity in trust score.".to_string(),
+            },
+        );
+        rules.insert(
+            "trust_network_contribution_weight".to_string(),
+            EpochRule {
+                value: 0.10,
+                description: "Weight of network contribution in trust score.".to_string(),
+            },
+        );
+        rules.insert(
+            "trust_historical_performance_weight".to_string(),
+            EpochRule {
+                value: 0.10,
+                description: "Weight of historical performance in trust score.".to_string(),
+            },
+        );
+        rules.insert(
+            "trust_cognitive_hazard_weight".to_string(),
+            EpochRule {
+                value: 0.15,
+                description: "Weight of cognitive hazard analysis in trust score.".to_string(),
+            },
+        );
+        rules.insert(
+            "trust_temporal_consistency_weight".to_string(),
+            EpochRule {
+                value: 0.15,
+                description: "Weight of temporal consistency in trust score.".to_string(),
+            },
+        );
+        rules.insert(
+            "trust_cognitive_dissonance_weight".to_string(),
+            EpochRule {
+                value: 0.10,
+                description: "Weight of cognitive dissonance in trust score.".to_string(),
+            },
+        );
+        rules.insert(
+            "trust_metadata_integrity_weight".to_string(),
+            EpochRule {
+                value: 0.10,
+                description: "Weight of transaction metadata integrity in trust score.".to_string(),
+            },
+        );
+        rules.insert(
+            "trust_predicted_behavior_weight".to_string(),
+            EpochRule {
+                value: 0.10,
+                description: "Weight of AI behavioral prediction in trust score.".to_string(),
+            },
+        );
+        rules.insert(
+            "trust_environmental_contribution_weight".to_string(),
+            EpochRule {
+                value: 0.10,
+                description: "Weight of PoCO score in trust score.".to_string(),
+            },
+        );
+
         // --- Economic ---
-        rules.insert("base_reward".to_string(), EpochRule { value: 250.0, description: "Base HCN reward per block before modifiers.".to_string() });
-        rules.insert("omega_threat_reward_modifier".to_string(), EpochRule { value: -0.25, description: "Reward reduction per elevated ΩMEGA threat level.".to_string() });
+        rules.insert(
+            "base_reward".to_string(),
+            EpochRule {
+                value: 250.0,
+                description: "Base HCN reward per block before modifiers.".to_string(),
+            },
+        );
+        rules.insert(
+            "omega_threat_reward_modifier".to_string(),
+            EpochRule {
+                value: -0.25,
+                description: "Reward reduction per elevated ΩMEGA threat level.".to_string(),
+            },
+        );
 
         // --- Tiered Fee Structure (in basis points, 100 bps = 1%) ---
-        rules.insert("fee_tier_1_bps".to_string(), EpochRule { value: 100.0, description: "Fee in basis points for amounts up to tier_1_threshold. (100 = 1%)".to_string() });
-        rules.insert("fee_tier_1_threshold".to_string(), EpochRule { value: 1_000_000.0, description: "Upper bound for fee tier 1.".to_string() });
-        rules.insert("fee_tier_2_bps".to_string(), EpochRule { value: 200.0, description: "Fee in basis points for amounts up to tier_2_threshold. (200 = 2%)".to_string() });
-        rules.insert("fee_tier_2_threshold".to_string(), EpochRule { value: 100_000_000.0, description: "Upper bound for fee tier 2.".to_string() });
-        rules.insert("fee_tier_3_bps".to_string(), EpochRule { value: 300.0, description: "Fee in basis points for amounts above tier_2_threshold. (300 = 3%)".to_string() });
-        rules.insert("base_tx_fee_min".to_string(), EpochRule { value: 1.0, description: "A minimum flat fee for all transactions, regardless of amount.".to_string() });
+        rules.insert(
+            "fee_tier_1_bps".to_string(),
+            EpochRule {
+                value: 100.0,
+                description: "Fee in basis points for amounts up to tier_1_threshold. (100 = 1%)"
+                    .to_string(),
+            },
+        );
+        rules.insert(
+            "fee_tier_1_threshold".to_string(),
+            EpochRule {
+                value: 1_000_000.0,
+                description: "Upper bound for fee tier 1.".to_string(),
+            },
+        );
+        rules.insert(
+            "fee_tier_2_bps".to_string(),
+            EpochRule {
+                value: 200.0,
+                description: "Fee in basis points for amounts up to tier_2_threshold. (200 = 2%)"
+                    .to_string(),
+            },
+        );
+        rules.insert(
+            "fee_tier_2_threshold".to_string(),
+            EpochRule {
+                value: 100_000_000.0,
+                description: "Upper bound for fee tier 2.".to_string(),
+            },
+        );
+        rules.insert(
+            "fee_tier_3_bps".to_string(),
+            EpochRule {
+                value: 300.0,
+                description: "Fee in basis points for amounts above tier_2_threshold. (300 = 3%)"
+                    .to_string(),
+            },
+        );
+        rules.insert(
+            "base_tx_fee_min".to_string(),
+            EpochRule {
+                value: 1.0,
+                description: "A minimum flat fee for all transactions, regardless of amount."
+                    .to_string(),
+            },
+        );
 
         // --- Governance & Karma ---
-        rules.insert("proposal_creation_cost".to_string(), EpochRule { value: 500.0, description: "Karma cost to create a new proposal.".to_string() });
-        rules.insert("guidance_karma_cost".to_string(), EpochRule { value: 5.0, description: "Karma cost to query the SAGA Guidance System.".to_string() });
-        rules.insert("karma_decay_rate".to_string(), EpochRule { value: 0.995, description: "Percentage of Karma remaining after decay each epoch.".to_string() });
-        rules.insert("proposal_vote_threshold".to_string(), EpochRule { value: 100.0, description: "Minimum votes for a proposal to be enacted.".to_string() });
-        rules.insert("council_size".to_string(), EpochRule { value: 5.0, description: "Number of members in the SAGA Council.".to_string() });
-        rules.insert("council_fatigue_decay".to_string(), EpochRule { value: 0.9, description: "Factor by which council member fatigue decays each epoch.".to_string() });
-        rules.insert("council_fatigue_per_action".to_string(), EpochRule { value: 0.1, description: "Fatigue increase for a council member per veto/vote.".to_string() });
-        
+        rules.insert(
+            "proposal_creation_cost".to_string(),
+            EpochRule {
+                value: 500.0,
+                description: "Karma cost to create a new proposal.".to_string(),
+            },
+        );
+        rules.insert(
+            "guidance_karma_cost".to_string(),
+            EpochRule {
+                value: 5.0,
+                description: "Karma cost to query the SAGA Guidance System.".to_string(),
+            },
+        );
+        rules.insert(
+            "karma_decay_rate".to_string(),
+            EpochRule {
+                value: 0.995,
+                description: "Percentage of Karma remaining after decay each epoch.".to_string(),
+            },
+        );
+        rules.insert(
+            "proposal_vote_threshold".to_string(),
+            EpochRule {
+                value: 100.0,
+                description: "Minimum votes for a proposal to be enacted.".to_string(),
+            },
+        );
+        rules.insert(
+            "council_size".to_string(),
+            EpochRule {
+                value: 5.0,
+                description: "Number of members in the SAGA Council.".to_string(),
+            },
+        );
+        rules.insert(
+            "council_fatigue_decay".to_string(),
+            EpochRule {
+                value: 0.9,
+                description: "Factor by which council member fatigue decays each epoch."
+                    .to_string(),
+            },
+        );
+        rules.insert(
+            "council_fatigue_per_action".to_string(),
+            EpochRule {
+                value: 0.1,
+                description: "Fatigue increase for a council member per veto/vote.".to_string(),
+            },
+        );
+
         // --- Technical ---
-        rules.insert("temporal_grace_period_secs".to_string(), EpochRule { value: 120.0, description: "Grace period in seconds for block timestamps.".to_string() });
-        rules.insert("scs_karma_normalization_divisor".to_string(), EpochRule { value: 10000.0, description: "Divisor to normalize Karma for SCS.".to_string() });
-        rules.insert("scs_stake_normalization_divisor".to_string(), EpochRule { value: 50000.0, description: "Divisor to normalize stake for SCS.".to_string() });
-        rules.insert("scs_smoothing_factor".to_string(), EpochRule { value: 0.1, description: "Smoothing factor for updating SCS (weight of the new score).".to_string() });
-        
+        rules.insert(
+            "temporal_grace_period_secs".to_string(),
+            EpochRule {
+                value: 120.0,
+                description: "Grace period in seconds for block timestamps.".to_string(),
+            },
+        );
+        rules.insert(
+            "scs_karma_normalization_divisor".to_string(),
+            EpochRule {
+                value: 10000.0,
+                description: "Divisor to normalize Karma for SCS.".to_string(),
+            },
+        );
+        rules.insert(
+            "scs_stake_normalization_divisor".to_string(),
+            EpochRule {
+                value: 50000.0,
+                description: "Divisor to normalize stake for SCS.".to_string(),
+            },
+        );
+        rules.insert(
+            "scs_smoothing_factor".to_string(),
+            EpochRule {
+                value: 0.1,
+                description: "Smoothing factor for updating SCS (weight of the new score)."
+                    .to_string(),
+            },
+        );
+
         let mut env_metrics = EnvironmentalMetrics::default();
         // A registry of trusted carbon credit projects and their quality multiplier.
-        env_metrics.trusted_project_registry.insert("verra-p-981".to_string(), 1.0); // High quality
-        env_metrics.trusted_project_registry.insert("gold-standard-p-334".to_string(), 1.0); // High quality
-        env_metrics.trusted_project_registry.insert("verra-p-201".to_string(), 0.8); // Medium quality
-        env_metrics.trusted_project_registry.insert("low-quality-p-001".to_string(), 0.5); // Low quality
+        env_metrics
+            .trusted_project_registry
+            .insert("verra-p-981".to_string(), 1.0); // High quality
+        env_metrics
+            .trusted_project_registry
+            .insert("gold-standard-p-334".to_string(), 1.0); // High quality
+        env_metrics
+            .trusted_project_registry
+            .insert("verra-p-201".to_string(), 0.8); // Medium quality
+        env_metrics
+            .trusted_project_registry
+            .insert("low-quality-p-001".to_string(), 0.5); // Low quality
 
         Self {
             reputation: ReputationState {
@@ -1578,8 +2018,11 @@ impl PalletSaga {
                 "Invalid issuer signature.".to_string(),
             ));
         }
-        
-        if !metrics.trusted_project_registry.contains_key(&cred.project_id) {
+
+        if !metrics
+            .trusted_project_registry
+            .contains_key(&cred.project_id)
+        {
             return Err(SagaError::InvalidCredential(format!(
                 "Project ID '{}' is not in the trusted registry.",
                 cred.project_id
@@ -1596,20 +2039,26 @@ impl PalletSaga {
         {
             let engine = self.cognitive_engine.read().await;
             if let Some(model) = &engine.credential_verifier_model {
-                let project_quality = metrics.trusted_project_registry.get(&cred.project_id).cloned().unwrap_or(0.5);
+                let project_quality = metrics
+                    .trusted_project_registry
+                    .get(&cred.project_id)
+                    .cloned()
+                    .unwrap_or(0.5);
                 let vintage_age = (current_year.saturating_sub(cred.vintage_year)) as f32;
-                
+
                 let features_vec = vec![
                     project_quality as f32,
                     vintage_age,
                     cred.tonnes_co2_sequestered as f32,
                     Self::calculate_shannon_entropy(&cred.additionality_proof) as f32, // Proxy for proof complexity
                 ];
-                let features_tensor = Tensor::from_slice(&features_vec).to_kind(Kind::Float).view([1, 4]);
+                let features_tensor = Tensor::from_slice(&features_vec)
+                    .to_kind(Kind::Float)
+                    .view([1, 4]);
 
                 let confidence_tensor = model.verify(&features_tensor);
                 let confidence_score = f64::try_from(confidence_tensor).unwrap_or(0.0);
-                
+
                 info!(cred_id=%cred.id, project_id=%cred.project_id, "AI Verification Confidence: {:.4}", confidence_score);
 
                 if confidence_score < 0.75 {
@@ -1623,7 +2072,10 @@ impl PalletSaga {
 
         let mut metrics_write = self.economy.environmental_metrics.write().await;
         if metrics_write.verified_credentials.contains_key(&cred.id) {
-             return Err(SagaError::InvalidCredential(format!("Credential ID '{}' has already been submitted this epoch.", cred.id)));
+            return Err(SagaError::InvalidCredential(format!(
+                "Credential ID '{}' has already been submitted this epoch.",
+                cred.id
+            )));
         }
 
         info!(
@@ -1631,11 +2083,13 @@ impl PalletSaga {
             beneficiary = %cred.beneficiary_node,
             "Storing verified CarbonOffsetCredential."
         );
-        metrics_write.verified_credentials.insert(cred.id.clone(), cred);
+        metrics_write
+            .verified_credentials
+            .insert(cred.id.clone(), cred);
 
         Ok(())
     }
-    
+
     #[instrument(skip(self, block, dag_arc))]
     pub async fn evaluate_block_with_saga(
         &self,
@@ -1643,12 +2097,12 @@ impl PalletSaga {
         dag_arc: &Arc<HyperDAG>,
     ) -> Result<()> {
         info!(block_id = %block.id, miner = %block.miner, "SAGA: Starting evaluation of new block.");
-        
+
         self.evaluate_and_score_block(block, dag_arc).await?;
 
         #[cfg(feature = "ai")]
         {
-            let dag = &**dag_arc; // Deref Arc to get &HyperDAG
+            let dag = dag_arc; // Removed needless deref
             self.cognitive_engine
                 .write()
                 .await
@@ -1659,7 +2113,7 @@ impl PalletSaga {
         info!(block_id = %block.id, "SAGA: Evaluation complete.");
         Ok(())
     }
-    
+
     async fn evaluate_and_score_block(
         &self,
         block: &HyperBlock,
@@ -1670,7 +2124,7 @@ impl PalletSaga {
             let net_state = *self.economy.network_state.read().await;
             (eco.clone(), net_state)
         };
-        let dag = &**dag_arc; // Deref Arc to get &HyperDAG
+        let dag = dag_arc; // Removed needless deref
 
         let trust_breakdown = self
             .cognitive_engine
@@ -1732,34 +2186,37 @@ impl PalletSaga {
         let metrics = self.economy.environmental_metrics.read().await;
         let market_premium = self
             .economic_model
-            .predictive_market_premium(&**dag_arc, &metrics)
+            .predictive_market_premium(dag_arc, &metrics)
             .await;
-        
-        let edict_multiplier =
-            if let Some(edict) = &*self.economy.active_edict.read().await {
-                if let EdictAction::Economic {
-                    reward_multiplier, ..
-                } = edict.action
-                {
-                    reward_multiplier
-                } else {
-                    1.0
-                }
+
+        let edict_multiplier = if let Some(edict) = &*self.economy.active_edict.read().await {
+            if let EdictAction::Economic {
+                reward_multiplier, ..
+            } = edict.action
+            {
+                reward_multiplier
             } else {
                 1.0
-            };
+            }
+        } else {
+            1.0
+        };
 
         // Integrate ISNM reward multiplier if the feature is enabled.
         let isnm_multiplier = self.get_isnm_reward_multiplier().await;
-        
+
         let total_fees = block.transactions.iter().map(|tx| tx.fee).sum::<u64>();
 
-        let final_reward =
-            (base_reward * scs * omega_penalty * market_premium * edict_multiplier * isnm_multiplier) as u64
-                + total_fees;
+        let final_reward = (base_reward
+            * scs
+            * omega_penalty
+            * market_premium
+            * edict_multiplier
+            * isnm_multiplier) as u64
+            + total_fees;
         Ok(final_reward)
     }
-    
+
     #[instrument(skip(self, dag))]
     pub async fn process_epoch_evolution(&self, current_epoch: u64, dag: &HyperDAG) {
         info!("SAGA is processing epoch evolution for epoch {current_epoch}");
@@ -1787,21 +2244,30 @@ impl PalletSaga {
         let avg_tx_per_block = dag.get_average_tx_per_block().await;
         let validator_count = dag.validators.read().await.len();
         let threat_level = omega::get_threat_level().await;
-        
+
         let sybil_risk = self.security_monitor.check_for_sybil_attack(dag).await;
-        let spam_risk = self.security_monitor.check_transactional_anomalies(dag).await;
-        let centralization_risk = self.security_monitor.check_for_centralization_risk(dag, 1).await;
-        let oracle_risk = self.security_monitor.check_for_oracle_manipulation_risk(dag).await;
+        let spam_risk = self
+            .security_monitor
+            .check_transactional_anomalies(dag)
+            .await;
+        let centralization_risk = self
+            .security_monitor
+            .check_for_centralization_risk(dag, 1)
+            .await;
+        let oracle_risk = self
+            .security_monitor
+            .check_for_oracle_manipulation_risk(dag)
+            .await;
         let time_drift_risk = self.security_monitor.check_for_time_drift_attack(dag).await;
         let wash_trading_risk = self.security_monitor.check_for_wash_trading(dag).await;
 
         let mut state_writer = self.economy.network_state.write().await;
         let old_state = *state_writer;
 
-        *state_writer = if threat_level != omega::identity::ThreatLevel::Nominal 
-            || sybil_risk > 0.8 
-            || spam_risk > 0.75 
-            || centralization_risk > 0.8 
+        *state_writer = if threat_level != omega::identity::ThreatLevel::Nominal
+            || sybil_risk > 0.8
+            || spam_risk > 0.75
+            || centralization_risk > 0.8
             || oracle_risk > 0.7
             || time_drift_risk > 0.8
             || wash_trading_risk > 0.6
@@ -1850,7 +2316,10 @@ impl PalletSaga {
                         info!(prediction, "SAGA LSTM predicted future congestion level.");
                         if prediction > 0.85 {
                             let mut insights = self.economy.proactive_insights.write().await;
-                            if !insights.iter().any(|i| i.title.contains("Predicted Congestion")) {
+                            if !insights
+                                .iter()
+                                .any(|i| i.title.contains("Predicted Congestion"))
+                            {
                                 insights.push(SagaInsight {
                                     id: Uuid::new_v4().to_string(),
                                     epoch: current_epoch,
@@ -1866,7 +2335,7 @@ impl PalletSaga {
             }
         }
     }
-    
+
     #[instrument(skip(self, trust_breakdown, dag_arc))]
     async fn update_credit_score(
         &self,
@@ -1875,15 +2344,21 @@ impl PalletSaga {
         dag_arc: &Arc<HyperDAG>,
     ) -> Result<()> {
         let rules = self.economy.epoch_rules.read().await;
-        let dag_read = &**dag_arc;
-        
+        let dag_read = dag_arc;
+
         let trust_weight = rules.get("scs_trust_weight").map_or(0.55, |r| r.value);
         let karma_weight = rules.get("scs_karma_weight").map_or(0.2, |r| r.value);
         let stake_weight = rules.get("scs_stake_weight").map_or(0.2, |r| r.value);
-        let env_weight = rules.get("scs_environmental_weight").map_or(0.05, |r| r.value);
+        let env_weight = rules
+            .get("scs_environmental_weight")
+            .map_or(0.05, |r| r.value);
 
-        let karma_divisor = rules.get("scs_karma_normalization_divisor").map_or(10000.0, |r| r.value);
-        let stake_divisor = rules.get("scs_stake_normalization_divisor").map_or(50000.0, |r| r.value);
+        let karma_divisor = rules
+            .get("scs_karma_normalization_divisor")
+            .map_or(10000.0, |r| r.value);
+        let stake_divisor = rules
+            .get("scs_stake_normalization_divisor")
+            .map_or(50000.0, |r| r.value);
         let smoothing_factor = rules.get("scs_smoothing_factor").map_or(0.1, |r| r.value);
 
         let karma_score = self
@@ -1899,8 +2374,12 @@ impl PalletSaga {
             .await
             .get(miner_address)
             .map_or(0.0, |&s| (s as f64 / stake_divisor).min(1.0));
-        
-        let env_score = trust_breakdown.factors.get("environmental_contribution").cloned().unwrap_or(0.5);
+
+        let env_score = trust_breakdown
+            .factors
+            .get("environmental_contribution")
+            .cloned()
+            .unwrap_or(0.5);
 
         let new_raw_score = (trust_breakdown.final_weighted_score * trust_weight)
             + (karma_score * karma_weight)
@@ -1909,21 +2388,28 @@ impl PalletSaga {
 
         let mut scores = self.reputation.credit_scores.write().await;
         let mut scs_entry = scores.entry(miner_address.to_string()).or_default().clone();
-        
-        scs_entry.score = (scs_entry.score * (1.0 - smoothing_factor)) + (new_raw_score * smoothing_factor);
+
+        scs_entry.score =
+            (scs_entry.score * (1.0 - smoothing_factor)) + (new_raw_score * smoothing_factor);
         scs_entry.last_updated = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|e| SagaError::TimeError(e.to_string()))?
             .as_secs();
-        scs_entry.history.push((scs_entry.last_updated, scs_entry.score));
+        scs_entry
+            .history
+            .push((scs_entry.last_updated, scs_entry.score));
         if scs_entry.history.len() > 200 {
             scs_entry.history.remove(0);
         }
-        
+
         scs_entry.factors = trust_breakdown.factors.clone();
-        scs_entry.factors.insert("karma_score".to_string(), karma_score);
-        scs_entry.factors.insert("stake_score".to_string(), stake_score);
-        
+        scs_entry
+            .factors
+            .insert("karma_score".to_string(), karma_score);
+        scs_entry
+            .factors
+            .insert("stake_score".to_string(), stake_score);
+
         scores.insert(miner_address.to_string(), scs_entry.clone());
         info!(miner = miner_address, scs = scs_entry.score, "SCS Updated");
         Ok(())
@@ -1935,7 +2421,9 @@ impl PalletSaga {
         let network_state = *self.economy.network_state.read().await;
 
         if network_state == NetworkState::Congested
-            && !insights.iter().any(|i| i.title.contains("Network Congestion"))
+            && !insights
+                .iter()
+                .any(|i| i.title.contains("Network Congestion"))
         {
             insights.push(SagaInsight {
                 id: Uuid::new_v4().to_string(),
@@ -1958,7 +2446,9 @@ impl PalletSaga {
         let proposal_count = self.governance.proposals.read().await.len();
         if current_epoch > 20
             && proposal_count < 5
-            && !insights.iter().any(|i| i.title.contains("Low Governance Activity"))
+            && !insights
+                .iter()
+                .any(|i| i.title.contains("Low Governance Activity"))
         {
             insights.push(SagaInsight {
                 id: Uuid::new_v4().to_string(),
@@ -1973,10 +2463,12 @@ impl PalletSaga {
     async fn tally_proposals(&self, current_epoch: u64) {
         let mut proposals = self.governance.proposals.write().await;
         let mut rules = self.economy.epoch_rules.write().await;
-        let vote_threshold = rules.get("proposal_vote_threshold").map_or(100.0, |r| r.value);
+        let vote_threshold = rules
+            .get("proposal_vote_threshold")
+            .map_or(100.0, |r| r.value);
         let karma_reward_proposer = 250;
         let karma_reward_voter = 25;
-        
+
         for proposal in proposals.values_mut() {
             if proposal.status == ProposalStatus::Voting {
                 if proposal.votes_for >= vote_threshold {
@@ -1989,10 +2481,20 @@ impl PalletSaga {
                             rule.value = *new_value;
                         }
                     }
-                    self.award_karma(&proposal.proposer, KarmaSource::CreateSuccessfulProposal, karma_reward_proposer).await;
+                    self.award_karma(
+                        &proposal.proposer,
+                        KarmaSource::CreateSuccessfulProposal,
+                        karma_reward_proposer,
+                    )
+                    .await;
                     for voter in &proposal.voters {
                         if voter.voted_for {
-                            self.award_karma(&voter.address, KarmaSource::VoteForPassedProposal, karma_reward_voter).await;
+                            self.award_karma(
+                                &voter.address,
+                                KarmaSource::VoteForPassedProposal,
+                                karma_reward_voter,
+                            )
+                            .await;
                         }
                     }
                 } else if current_epoch > proposal.creation_epoch + 10 {
@@ -2012,9 +2514,17 @@ impl PalletSaga {
     }
 
     async fn process_karma_decay(&self, current_epoch: u64) {
-        let decay_rate = self.economy.epoch_rules.read().await.get("karma_decay_rate").map_or(1.0, |r| r.value);
-        if decay_rate >= 1.0 { return; }
-        
+        let decay_rate = self
+            .economy
+            .epoch_rules
+            .read()
+            .await
+            .get("karma_decay_rate")
+            .map_or(1.0, |r| r.value);
+        if decay_rate >= 1.0 {
+            return;
+        }
+
         let mut karma_ledgers = self.reputation.karma_ledgers.write().await;
         for (address, ledger) in karma_ledgers.iter_mut() {
             if ledger.last_updated_epoch < current_epoch {
@@ -2027,29 +2537,45 @@ impl PalletSaga {
 
     async fn update_council(&self, current_epoch: u64) {
         let mut council = self.governance.council.write().await;
-        if council.last_updated_epoch >= current_epoch { return; }
-        
+        if council.last_updated_epoch >= current_epoch {
+            return;
+        }
+
         let rules = self.economy.epoch_rules.read().await;
         let council_size = rules.get("council_size").map_or(5.0, |r| r.value) as usize;
         let fatigue_decay = rules.get("council_fatigue_decay").map_or(0.9, |r| r.value);
-        
+
         for member in &mut council.members {
             member.cognitive_load *= fatigue_decay;
         }
-        
+
         let karma_ledgers = self.reputation.karma_ledgers.read().await;
         let mut karma_vec: Vec<_> = karma_ledgers.iter().collect();
         karma_vec.sort_by(|a, b| b.1.total_karma.cmp(&a.1.total_karma));
-        
-        let new_members: Vec<CouncilMember> = karma_vec.into_iter().take(council_size).map(|(address, _)| {
-            let existing_load = council.members.iter().find(|m| m.address == *address).map_or(0.0, |m| m.cognitive_load);
-            CouncilMember {
-                address: address.clone(),
-                cognitive_load: existing_load,
-            }
-        }).collect();
-        
-        if council.members.iter().map(|m| &m.address).collect::<Vec<_>>() != new_members.iter().map(|m| &m.address).collect::<Vec<_>>() {
+
+        let new_members: Vec<CouncilMember> = karma_vec
+            .into_iter()
+            .take(council_size)
+            .map(|(address, _)| {
+                let existing_load = council
+                    .members
+                    .iter()
+                    .find(|m| m.address == *address)
+                    .map_or(0.0, |m| m.cognitive_load);
+                CouncilMember {
+                    address: address.clone(),
+                    cognitive_load: existing_load,
+                }
+            })
+            .collect();
+
+        if council
+            .members
+            .iter()
+            .map(|m| &m.address)
+            .collect::<Vec<_>>()
+            != new_members.iter().map(|m| &m.address).collect::<Vec<_>>()
+        {
             info!(new_council = ?new_members.iter().map(|m| &m.address).collect::<Vec<_>>(), "Updating SAGA Council based on Karma ranking");
             council.members = new_members;
         }
@@ -2058,7 +2584,9 @@ impl PalletSaga {
 
     async fn issue_new_edict(&self, current_epoch: u64, dag: &HyperDAG) {
         let mut last_edict_epoch = self.economy.last_edict_epoch.write().await;
-        if current_epoch < *last_edict_epoch + 10 { return; }
+        if current_epoch < *last_edict_epoch + 10 {
+            return;
+        }
 
         let mut active_edict = self.economy.active_edict.write().await;
         if let Some(edict) = &*active_edict {
@@ -2082,8 +2610,10 @@ impl PalletSaga {
                             description: "Sustained Network Congestion: Temporarily increasing block rewards to incentivize faster processing.".to_string(),
                             action: EdictAction::Economic { reward_multiplier: 1.2, fee_multiplier: 1.0 },
                         })
-                    } else { None }
-                },
+                    } else {
+                        None
+                    }
+                }
                 NetworkState::Degraded => {
                     let validator_count = dag.validators.read().await.len();
                     Some(SagaEdict {
@@ -2109,31 +2639,60 @@ impl PalletSaga {
         let mut council = self.governance.council.write().await;
 
         if current_epoch < council.autonomous_governance_cooldown_until_epoch {
-            debug!("SAGA autonomous governance is in a cooldown period until epoch {}.", council.autonomous_governance_cooldown_until_epoch);
+            debug!(
+                "SAGA autonomous governance is in a cooldown period until epoch {}.",
+                council.autonomous_governance_cooldown_until_epoch
+            );
             return;
         }
 
-        let avg_cognitive_load: f64 = council.members.iter().map(|m| m.cognitive_load).sum::<f64>() / council.members.len().max(1) as f64;
+        let avg_cognitive_load: f64 = council
+            .members
+            .iter()
+            .map(|m| m.cognitive_load)
+            .sum::<f64>()
+            / council.members.len().max(1) as f64;
         if avg_cognitive_load > 0.8 {
-            warn!(avg_load = avg_cognitive_load, "SAGA Council cognitive load is high. Initiating governance cooldown for 5 epochs.");
+            warn!(
+                avg_load = avg_cognitive_load,
+                "SAGA Council cognitive load is high. Initiating governance cooldown for 5 epochs."
+            );
             council.autonomous_governance_cooldown_until_epoch = current_epoch + 5;
             return;
         }
 
-        if self.propose_validator_stake_adjustment(current_epoch, dag).await {
-            council.members.iter_mut().for_each(|m| m.cognitive_load += 0.1);
+        if self
+            .propose_validator_stake_adjustment(current_epoch, dag)
+            .await
+        {
+            council
+                .members
+                .iter_mut()
+                .for_each(|m| m.cognitive_load += 0.1);
         }
-        if self.propose_governance_parameter_tuning(current_epoch).await {
-            council.members.iter_mut().for_each(|m| m.cognitive_load += 0.2);
+        if self
+            .propose_governance_parameter_tuning(current_epoch)
+            .await
+        {
+            council
+                .members
+                .iter_mut()
+                .for_each(|m| m.cognitive_load += 0.2);
         }
         if self.propose_economic_parameter_tuning(current_epoch).await {
-            council.members.iter_mut().for_each(|m| m.cognitive_load += 0.15);
+            council
+                .members
+                .iter_mut()
+                .for_each(|m| m.cognitive_load += 0.15);
         }
         if self.propose_scs_weight_tuning(current_epoch).await {
-            council.members.iter_mut().for_each(|m| m.cognitive_load += 0.25);
+            council
+                .members
+                .iter_mut()
+                .for_each(|m| m.cognitive_load += 0.25);
         }
     }
-    
+
     async fn update_environmental_metrics(&self, _current_epoch: u64) {
         let mut metrics = self.economy.environmental_metrics.write().await;
 
@@ -2141,7 +2700,11 @@ impl PalletSaga {
             .verified_credentials
             .values()
             .map(|c| {
-                let quality_multiplier = metrics.trusted_project_registry.get(&c.project_id).cloned().unwrap_or(0.5);
+                let quality_multiplier = metrics
+                    .trusted_project_registry
+                    .get(&c.project_id)
+                    .cloned()
+                    .unwrap_or(0.5);
                 c.tonnes_co2_sequestered * quality_multiplier
             })
             .sum();
@@ -2166,10 +2729,14 @@ impl PalletSaga {
         let validator_count = dag.validators.read().await.len();
         let min_stake_rule = "min_validator_stake".to_string();
         let current_min_stake = rules.get(&min_stake_rule).map_or(1000.0, |r| r.value);
-        
-        if validator_count < 5 && *self.economy.network_state.read().await == NetworkState::Degraded {
+
+        if validator_count < 5 && *self.economy.network_state.read().await == NetworkState::Degraded
+        {
             let mut proposals = self.governance.proposals.write().await;
-            if !proposals.values().any(|p| p.status == ProposalStatus::Voting && matches!(&p.proposal_type, ProposalType::UpdateRule(name, _) if name == &min_stake_rule)) {
+            if !proposals.values().any(|p| {
+                p.status == ProposalStatus::Voting
+                    && matches!(&p.proposal_type, ProposalType::UpdateRule(name, _) if name == &min_stake_rule)
+            }) {
                 let new_stake_req = (current_min_stake * 0.9).round();
                 let proposal = GovernanceProposal {
                     id: format!("saga-proposal-{}", Uuid::new_v4()),
@@ -2191,31 +2758,49 @@ impl PalletSaga {
     }
 
     async fn propose_governance_parameter_tuning(&self, current_epoch: u64) -> bool {
-        if current_epoch % 20 != 0 { return false; } // Check less frequently
+        if current_epoch % 20 != 0 {
+            return false;
+        } // Check less frequently
 
         let proposals = self.governance.proposals.read().await;
-        let recent_proposals: Vec<_> = proposals.values()
-            .filter(|p| p.creation_epoch > current_epoch.saturating_sub(20) && p.proposer != "SAGA_AUTONOMOUS_AGENT")
+        let recent_proposals: Vec<_> = proposals
+            .values()
+            .filter(|p| {
+                p.creation_epoch > current_epoch.saturating_sub(20)
+                    && p.proposer != "SAGA_AUTONOMOUS_AGENT"
+            })
             .collect();
 
-        if recent_proposals.len() < 2 { return false; }
+        if recent_proposals.len() < 2 {
+            return false;
+        }
 
-        let rejected_count = recent_proposals.iter().filter(|p| p.status == ProposalStatus::Rejected).count();
+        let rejected_count = recent_proposals
+            .iter()
+            .filter(|p| p.status == ProposalStatus::Rejected)
+            .count();
         let rejection_rate = rejected_count as f64 / recent_proposals.len() as f64;
 
         let vote_threshold_rule = "proposal_vote_threshold".to_string();
         let rules = self.economy.epoch_rules.read().await;
         let current_threshold = rules.get(&vote_threshold_rule).map_or(100.0, |r| r.value);
-        
+
         if rejection_rate > 0.75 {
             let mut proposals_writer = self.governance.proposals.write().await;
-            if !proposals_writer.values().any(|p| p.status == ProposalStatus::Voting && matches!(&p.proposal_type, ProposalType::UpdateRule(name, _) if name == &vote_threshold_rule)) {
+            if !proposals_writer.values().any(|p| {
+                p.status == ProposalStatus::Voting
+                    && matches!(&p.proposal_type, ProposalType::UpdateRule(name, _) if name == &vote_threshold_rule)
+            }) {
                 let new_threshold = (current_threshold * 0.9).round();
                 let proposal = GovernanceProposal {
                     id: format!("saga-proposal-{}", Uuid::new_v4()),
                     proposer: "SAGA_AUTONOMOUS_AGENT".to_string(),
                     proposal_type: ProposalType::UpdateRule(vote_threshold_rule, new_threshold),
-                    votes_for: 1.0, votes_against: 0.0, status: ProposalStatus::Voting, voters: vec![], creation_epoch: current_epoch,
+                    votes_for: 1.0,
+                    votes_against: 0.0,
+                    status: ProposalStatus::Voting,
+                    voters: vec![],
+                    creation_epoch: current_epoch,
                 };
                 info!(proposal_id = %proposal.id, "SAGA detected a high proposal rejection rate and is proposing to lower the vote threshold to {}.", new_threshold);
                 self.award_karma("SAGA_AUTONOMOUS_AGENT", KarmaSource::SagaAutonomousAction, 100).await;
@@ -2227,25 +2812,37 @@ impl PalletSaga {
     }
 
     async fn propose_economic_parameter_tuning(&self, current_epoch: u64) -> bool {
-        if current_epoch % 15 != 0 { return false; }
-        
+        if current_epoch % 15 != 0 {
+            return false;
+        }
+
         let fee_rule = "base_tx_fee_min".to_string();
         let rules = self.economy.epoch_rules.read().await;
         let current_base_fee = rules.get(&fee_rule).map_or(1.0, |r| r.value);
         let congestion_history = self.economy.congestion_history.read().await;
-        
-        if congestion_history.len() < 5 { return false; }
-        let avg_congestion = congestion_history.iter().sum::<f64>() / congestion_history.len() as f64;
+
+        if congestion_history.len() < 5 {
+            return false;
+        }
+        let avg_congestion =
+            congestion_history.iter().sum::<f64>() / congestion_history.len() as f64;
 
         if avg_congestion > 0.75 {
             let mut proposals_writer = self.governance.proposals.write().await;
-            if !proposals_writer.values().any(|p| p.status == ProposalStatus::Voting && matches!(&p.proposal_type, ProposalType::UpdateRule(name, _) if name == &fee_rule)) {
-                let new_fee = (current_base_fee * 1.25).round(); 
+            if !proposals_writer.values().any(|p| {
+                p.status == ProposalStatus::Voting
+                    && matches!(&p.proposal_type, ProposalType::UpdateRule(name, _) if name == &fee_rule)
+            }) {
+                let new_fee = (current_base_fee * 1.25).round();
                 let proposal = GovernanceProposal {
                     id: format!("saga-proposal-{}", Uuid::new_v4()),
                     proposer: "SAGA_AUTONOMOUS_AGENT".to_string(),
                     proposal_type: ProposalType::UpdateRule(fee_rule, new_fee),
-                    votes_for: 1.0, votes_against: 0.0, status: ProposalStatus::Voting, voters: vec![], creation_epoch: current_epoch,
+                    votes_for: 1.0,
+                    votes_against: 0.0,
+                    status: ProposalStatus::Voting,
+                    voters: vec![],
+                    creation_epoch: current_epoch,
                 };
                 info!(proposal_id = %proposal.id, "SAGA detected sustained network congestion and is proposing to increase the minimum base transaction fee to {}.", new_fee);
                 self.award_karma("SAGA_AUTONOMOUS_AGENT", KarmaSource::SagaAutonomousAction, 100).await;
@@ -2257,14 +2854,22 @@ impl PalletSaga {
     }
 
     async fn propose_scs_weight_tuning(&self, current_epoch: u64) -> bool {
-        if current_epoch % 25 != 0 { return false; } // Check even less frequently
+        if current_epoch % 25 != 0 {
+            return false;
+        } // Check even less frequently
 
         let scores = self.reputation.credit_scores.read().await;
-        if scores.len() < 10 { return false; }
+        if scores.len() < 10 {
+            return false;
+        }
 
         let mut high_env_low_scs_count = 0;
         for scs in scores.values() {
-            let env_score = scs.factors.get("environmental_contribution").cloned().unwrap_or(0.0);
+            let env_score = scs
+                .factors
+                .get("environmental_contribution")
+                .cloned()
+                .unwrap_or(0.0);
             if env_score > 0.8 && scs.score < 0.6 {
                 high_env_low_scs_count += 1;
             }
@@ -2276,16 +2881,25 @@ impl PalletSaga {
             let rules = self.economy.epoch_rules.read().await;
             let current_weight = rules.get(&weight_rule).map_or(0.05, |r| r.value);
 
-            if current_weight >= 0.2 { return false; } // Don't let it grow too large
+            if current_weight >= 0.2 {
+                return false;
+            } // Don't let it grow too large
 
             let mut proposals_writer = self.governance.proposals.write().await;
-            if !proposals_writer.values().any(|p| p.status == ProposalStatus::Voting && matches!(&p.proposal_type, ProposalType::UpdateRule(name, _) if name == &weight_rule)) {
+            if !proposals_writer.values().any(|p| {
+                p.status == ProposalStatus::Voting
+                    && matches!(&p.proposal_type, ProposalType::UpdateRule(name, _) if name == &weight_rule)
+            }) {
                 let new_weight = (current_weight + 0.05).min(0.2);
                 let proposal = GovernanceProposal {
                     id: format!("saga-proposal-{}", Uuid::new_v4()),
                     proposer: "SAGA_AUTONOMOUS_AGENT".to_string(),
                     proposal_type: ProposalType::UpdateRule(weight_rule, new_weight),
-                    votes_for: 1.0, votes_against: 0.0, status: ProposalStatus::Voting, voters: vec![], creation_epoch: current_epoch,
+                    votes_for: 1.0,
+                    votes_against: 0.0,
+                    status: ProposalStatus::Voting,
+                    voters: vec![],
+                    creation_epoch: current_epoch,
                 };
                 info!(proposal_id = %proposal.id, "SAGA detected that environmental contributions may be undervalued and is proposing to increase the SCS environmental weight to {}.", new_weight);
                 self.award_karma("SAGA_AUTONOMOUS_AGENT", KarmaSource::SagaAutonomousAction, 150).await;

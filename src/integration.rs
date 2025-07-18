@@ -1,11 +1,11 @@
 #[cfg(test)]
 mod tests {
-    use hyperdag::config::Config;
-    use hyperdag::hyperdag::{HyperBlock, HyperDAG};
-    use hyperdag::mempool::Mempool;
-    use hyperdag::p2p::P2PServer;
-    use hyperdag::transaction::{Transaction, UTXO};
-    use hyperdag::wallet::HyperWallet;
+    use hyperchain::config::Config;
+    use hyperchain::hyperdag::{HyperBlock, HyperDAG};
+    use hyperchain::mempool::Mempool;
+    use hyperchain::p2p::P2PServer;
+    use hyperchain::transaction::{Transaction, UTXO};
+    use hyperchain::wallet::HyperWallet;
     use std::collections::HashMap;
     use std::sync::Arc;
     use tokio::sync::Mutex;

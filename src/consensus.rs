@@ -167,17 +167,14 @@ impl Consensus {
         dag: &HyperDAG,
     ) -> Result<(), ConsensusError> {
         let rules = self.saga.economy.epoch_rules.read().await;
-        let min_stake = rules
-            .get("min_validator_stake")
-            .map_or(1000.0, |r| r.value) as u64;
+        let min_stake = rules.get("min_validator_stake").map_or(1000.0, |r| r.value) as u64;
 
         let validators = dag.validators.read().await;
         let validator_stake = validators.get(validator_address).copied().unwrap_or(0);
 
         if validator_stake < min_stake {
             return Err(ConsensusError::ProofOfStakeFailed(format!(
-                "Insufficient stake for validator {}. Required: {}, Found: {}",
-                validator_address, min_stake, validator_stake
+                "Insufficient stake for validator {validator_address}. Required: {min_stake}, Found: {validator_stake}"
             )));
         }
         Ok(())
@@ -221,9 +218,8 @@ impl Consensus {
     /// This is the core of PoSe, where SAGA's intelligence modifies the base PoW.
     pub async fn get_effective_difficulty(&self, miner_address: &str) -> u64 {
         let rules = self.saga.economy.epoch_rules.read().await;
-        let base_difficulty = rules
-            .get("base_difficulty")
-            .map_or(10.0, |r| r.value) as u64;
+        // Clippy fix: unnecessary_map_or
+        let base_difficulty = rules.get("base_difficulty").map_or(10.0, |r| r.value) as u64;
 
         // Fetch the miner's Saga Credit Score (SCS). Default to 0.5 (neutral) if not found.
         let scs = self

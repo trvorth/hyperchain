@@ -24,7 +24,7 @@ use axum::{
 };
 use governor::clock::QuantaClock;
 use governor::state::{InMemoryState, NotKeyed};
-use governor::{Quota, RateLimiter};
+use governor::{Quota, RateLimiter}; // FIX: Use Quota explicitly
 use libp2p::identity;
 use libp2p::PeerId;
 use nonzero_ext::nonzero;
@@ -193,7 +193,9 @@ impl Node {
         info!("Node Local P2P Peer ID: {local_peer_id}");
         let full_local_p2p_address = format!("{}/p2p/{}", config.p2p_address, local_peer_id);
         if config.local_full_p2p_address.as_deref() != Some(&full_local_p2p_address) {
-            info!("Updating config file '{config_path}' with local full P2P address: {full_local_p2p_address}");
+            info!(
+                "Updating config file '{config_path}' with local full P2P address: {full_local_p2p_address}"
+            );
             config.local_full_p2p_address = Some(full_local_p2p_address.clone());
             config.save(&config_path)?;
         }
@@ -271,7 +273,9 @@ impl Node {
                         amount: 100,
                         tx_id: genesis_id_convention,
                         output_index: 0,
-                        explorer_link: format!("[https://hyperblockexplorer.org/utxo/](https://hyperblockexplorer.org/utxo/){utxo_id}"),
+                        explorer_link: format!(
+                            "[https://hyperblockexplorer.org/utxo/](https://hyperblockexplorer.org/utxo/){utxo_id}"
+                        ),
                     },
                 );
             }
@@ -322,7 +326,8 @@ impl Node {
             join_set.spawn(async move {
                 // Give a small delay at startup to avoid resource contention.
                 tokio::time::sleep(Duration::from_secs(10)).await;
-                let mut interval = tokio::time::interval(Duration::from_secs(MIN_UPTIME_HEARTBEAT_SECS));
+                let mut interval =
+                    tokio::time::interval(Duration::from_secs(MIN_UPTIME_HEARTBEAT_SECS));
                 interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
                 loop {
@@ -372,47 +377,72 @@ impl Node {
                             }
                         }
                         P2PCommand::SyncResponse { blocks, utxos } => {
-                            info!("Received state sync response with {} blocks and {} UTXOs.", blocks.len(), utxos.len());
-                             {
+                            info!(
+                                "Received state sync response with {} blocks and {} UTXOs.",
+                                blocks.len(),
+                                utxos.len()
+                            );
+                            {
                                 let mut utxos_writer = utxos_clone.write().await;
                                 let initial_utxo_count = utxos_writer.len();
                                 utxos_writer.extend(utxos);
-                                info!("UTXO set updated with {} new entries from sync.", utxos_writer.len() - initial_utxo_count);
+                                info!(
+                                    "UTXO set updated with {} new entries from sync.",
+                                    utxos_writer.len() - initial_utxo_count
+                                );
                             }
-                            if let Ok(sorted_blocks) = Self::topological_sort_blocks(blocks, &dag_clone).await {
+                            if let Ok(sorted_blocks) =
+                                Self::topological_sort_blocks(blocks, &dag_clone).await
+                            {
                                 let mut added_count = 0;
                                 let mut failed_count = 0;
                                 for b in sorted_blocks {
                                     match dag_clone.add_block(b, &utxos_clone).await {
                                         Ok(true) => added_count += 1,
-                                        Ok(false) => { /* block already exists */ },
+                                        Ok(false) => { /* block already exists */ }
                                         Err(e) => {
                                             warn!("Failed to add block from sync response: {}", e);
                                             failed_count += 1;
                                         }
                                     }
                                 }
-                                info!("Block sync complete. Added: {}, Failed: {}.", added_count, failed_count);
+                                info!(
+                                    "Block sync complete. Added: {}, Failed: {}.",
+                                    added_count, failed_count
+                                );
                                 dag_clone.run_periodic_maintenance().await;
                             } else {
-                                error!("Failed to topologically sort blocks from sync response. Discarding batch.");
+                                error!(
+                                    "Failed to topologically sort blocks from sync response. Discarding batch."
+                                );
                             }
-                        },
+                        }
                         P2PCommand::RequestBlock { block_id, peer_id } => {
-                            info!("Received request for block {} from peer {}", block_id, peer_id);
+                            info!(
+                                "Received request for block {} from peer {}",
+                                block_id, peer_id
+                            );
                             let blocks_reader = dag_clone.blocks.read().await;
                             if let Some(block) = blocks_reader.get(&block_id) {
                                 info!("Found block {}, sending to peer {}", block_id, peer_id);
-                                let cmd = P2PCommand::SendBlockToOnePeer { peer_id, block: Box::new(block.clone()) };
+                                let cmd = P2PCommand::SendBlockToOnePeer {
+                                    peer_id,
+                                    block: Box::new(block.clone()),
+                                };
                                 if let Err(e) = p2p_tx_clone.send(cmd).await {
                                     error!("Failed to send SendBlockToOnePeer command: {}", e);
                                 }
                             } else {
-                                warn!("Peer {} requested block {} which we don't have.", peer_id, block_id);
+                                warn!(
+                                    "Peer {} requested block {} which we don't have.",
+                                    peer_id, block_id
+                                );
                             }
                         }
                         P2PCommand::BroadcastCarbonCredential(cred) => {
-                             if let Err(e) = saga_clone.verify_and_store_credential(cred.clone()).await {
+                            if let Err(e) =
+                                saga_clone.verify_and_store_credential(cred.clone()).await
+                            {
                                 warn!(cred_id=%cred.id, "Received invalid CarbonOffsetCredential from network: {}", e);
                             } else {
                                 info!(cred_id=%cred.id, "Successfully verified and stored CarbonOffsetCredential from network.");
@@ -426,7 +456,7 @@ impl Node {
         };
         join_set.spawn(command_processor_task);
         // --- End Command Processor Task ---
-        
+
         // --- P2P Server Task ---
         if !self.config.peers.is_empty() {
             info!("Peers detected in config, initializing P2P server task...");
@@ -458,11 +488,26 @@ impl Node {
                         node_signing_key_material: &node_signing_key_bytes_for_p2p,
                         peer_cache_path: peer_cache_path_clone.clone(),
                     };
-                    info!("Attempting to initialize P2P server (attempt {})...", attempts + 1);
-                    match timeout(Duration::from_secs(15),P2PServer::new(p2p_config, p2p_command_sender_clone.clone()),).await {
-                        Ok(Ok(server)) => { info!("P2P server initialized successfully."); break server; }
-                        Ok(Err(e)) => { warn!("P2P server failed to initialize: {e}."); }
-                        Err(_) => { warn!("P2P server initialization timed out."); }
+                    info!(
+                        "Attempting to initialize P2P server (attempt {})...",
+                        attempts + 1
+                    );
+                    match timeout(
+                        Duration::from_secs(15),
+                        P2PServer::new(p2p_config, p2p_command_sender_clone.clone()),
+                    )
+                    .await
+                    {
+                        Ok(Ok(server)) => {
+                            info!("P2P server initialized successfully.");
+                            break server;
+                        }
+                        Ok(Err(e)) => {
+                            warn!("P2P server failed to initialize: {e}.");
+                        }
+                        Err(_) => {
+                            warn!("P2P server initialization timed out.");
+                        }
                     }
                     attempts += 1;
                     let backoff_duration = Duration::from_secs(2u64.pow(attempts.min(6)));
@@ -470,7 +515,10 @@ impl Node {
                     tokio::time::sleep(backoff_duration).await;
                 };
                 if !p2p_initial_peers_config_clone.is_empty() {
-                    if let Err(e) = p2p_command_sender_clone.send(P2PCommand::RequestState).await {
+                    if let Err(e) = p2p_command_sender_clone
+                        .send(P2PCommand::RequestState)
+                        .await
+                    {
                         error!("Failed to send initial RequestState P2P command: {e}");
                     }
                 }
@@ -486,18 +534,20 @@ impl Node {
             let miner_utxos_clone = self.utxos.clone();
             let miner_clone = self.miner.clone();
             join_set.spawn(async move {
-                miner_dag_clone.run_solo_miner(
-                    miner_wallet_clone,
-                    miner_mempool_clone,
-                    miner_utxos_clone,
-                    miner_clone,
-                    DEFAULT_MINING_INTERVAL_SECS,
-                ).await;
+                miner_dag_clone
+                    .run_solo_miner(
+                        miner_wallet_clone,
+                        miner_mempool_clone,
+                        miner_utxos_clone,
+                        miner_clone,
+                        DEFAULT_MINING_INTERVAL_SECS,
+                    )
+                    .await;
                 Ok(())
             });
         }
         // --- End P2P Server Task ---
-        
+
         // --- API Server Task ---
         let server_task_fut = {
             let app_state = AppState {
@@ -510,6 +560,7 @@ impl Node {
             };
             async move {
                 let rate_limiter: Arc<DirectApiRateLimiter> =
+                    // FIX: Construct Quota explicitly
                     Arc::new(RateLimiter::direct(Quota::per_second(nonzero!(50u32))));
                 let app = Router::new()
                     .route("/info", get(info_handler))
@@ -536,7 +587,9 @@ impl Node {
                 info!("API server listening on {}", listener.local_addr().unwrap());
                 if let Err(e) = axum::serve(listener, app.into_make_service()).await {
                     error!("API server failed: {e}");
-                    return Err(NodeError::ServerExecution(format!("API server failed: {e}")));
+                    return Err(NodeError::ServerExecution(format!(
+                        "API server failed: {e}"
+                    )));
                 }
                 Ok(())
             }
@@ -562,11 +615,17 @@ impl Node {
         info!("Node shutdown complete.");
         Ok(())
     }
-    
+
     // --- Topological Sort Helper ---
-    async fn topological_sort_blocks(blocks: Vec<HyperBlock>, dag: &HyperDAG) -> Result<Vec<HyperBlock>, NodeError> {
-        if blocks.is_empty() { return Ok(vec![]); }
-        let block_map: HashMap<String, HyperBlock> = blocks.into_iter().map(|b| (b.id.clone(), b)).collect();
+    async fn topological_sort_blocks(
+        blocks: Vec<HyperBlock>,
+        dag: &HyperDAG,
+    ) -> Result<Vec<HyperBlock>, NodeError> {
+        if blocks.is_empty() {
+            return Ok(vec![]);
+        }
+        let block_map: HashMap<String, HyperBlock> =
+            blocks.into_iter().map(|b| (b.id.clone(), b)).collect();
         let mut in_degree: HashMap<String, usize> = HashMap::new();
         let mut children_map: HashMap<String, Vec<String>> = HashMap::new();
         let local_blocks = dag.blocks.read().await;
@@ -575,15 +634,27 @@ impl Node {
             for parent_id in &block.parents {
                 if block_map.contains_key(parent_id) {
                     degree += 1;
-                    children_map.entry(parent_id.clone()).or_default().push(id.clone());
+                    children_map
+                        .entry(parent_id.clone())
+                        .or_default()
+                        .push(id.clone());
                 } else if !local_blocks.contains_key(parent_id) {
-                    warn!("Sync Error: Block {} has a missing parent {} that is not in the local DAG or the sync batch.", id, parent_id);
-                    return Err(NodeError::SyncError(format!("Missing parent {parent_id} for block {id} in sync batch")));
+                    warn!(
+                        "Sync Error: Block {} has a missing parent {} that is not in the local DAG or the sync batch.",
+                        id, parent_id
+                    );
+                    return Err(NodeError::SyncError(format!(
+                        "Missing parent {parent_id} for block {id} in sync batch"
+                    )));
                 }
             }
             in_degree.insert(id.clone(), degree);
         }
-        let mut queue: VecDeque<String> = in_degree.iter().filter(|(_, &degree)| degree == 0).map(|(id, _)| id.clone()).collect();
+        let mut queue: VecDeque<String> = in_degree
+            .iter()
+            .filter(|(_, &degree)| degree == 0)
+            .map(|(id, _)| id.clone())
+            .collect();
         let mut sorted_blocks = Vec::with_capacity(block_map.len());
         while let Some(id) = queue.pop_front() {
             if let Some(children) = children_map.get(&id) {
@@ -599,8 +670,14 @@ impl Node {
             sorted_blocks.push(block_map.get(&id).unwrap().clone());
         }
         if sorted_blocks.len() != block_map.len() {
-            error!("Cycle detected in block sync batch or missing parent. Sorted {} of {} blocks.", sorted_blocks.len(), block_map.len());
-            Err(NodeError::SyncError("Cycle detected or missing parent in block sync batch.".to_string(),))
+            error!(
+                "Cycle detected in block sync batch or missing parent. Sorted {} of {} blocks.",
+                sorted_blocks.len(),
+                block_map.len()
+            );
+            Err(NodeError::SyncError(
+                "Cycle detected or missing parent in block sync batch.".to_string(),
+            ))
         } else {
             Ok(sorted_blocks)
         }
@@ -633,9 +710,15 @@ struct AppState {
 }
 
 #[derive(Deserialize)]
-struct SagaQuery { query: String }
+struct SagaQuery {
+    query: String,
+}
 #[derive(Serialize)]
-struct ApiError { code: u16, message: String, details: Option<String> }
+struct ApiError {
+    code: u16,
+    message: String,
+    details: Option<String>,
+}
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> axum::response::Response {
@@ -646,26 +729,56 @@ impl IntoResponse for ApiError {
 
 // --- API Handlers ---
 
-async fn ask_saga(State(state): State<AppState>, Json(payload): Json<SagaQuery>) -> Result<Json<String>, ApiError> {
+async fn ask_saga(
+    State(state): State<AppState>,
+    Json(payload): Json<SagaQuery>,
+) -> Result<Json<String>, ApiError> {
     let saga = &state.saga;
     let network_state = *saga.economy.network_state.read().await;
     let threat_level = crate::omega::get_threat_level().await;
-    let proactive_insight = saga.economy.proactive_insights.read().await.first().cloned();
-    match saga.guidance_system.get_guidance_response(&payload.query, network_state, threat_level, proactive_insight.as_ref()).await {
+    let proactive_insight = saga
+        .economy
+        .proactive_insights
+        .read()
+        .await
+        .first()
+        .cloned();
+    match saga
+        .guidance_system
+        .get_guidance_response(
+            &payload.query,
+            network_state,
+            threat_level,
+            proactive_insight.as_ref(),
+        )
+        .await
+    {
         Ok(response) => Ok(Json(response)),
         Err(SagaError::AmbiguousQuery(topics)) => {
-            let error_message = format!("SAGA query is too ambiguous. Please be more specific. Possible topics: {topics:?}");
+            let error_message = format!(
+                "SAGA query is too ambiguous. Please be more specific. Possible topics: {topics:?}"
+            );
             error!("{}", error_message);
-            Err(ApiError { code: 400, message: "Ambiguous query".to_string(), details: Some(error_message) })
+            Err(ApiError {
+                code: 400,
+                message: "Ambiguous query".to_string(),
+                details: Some(error_message),
+            })
         }
         Err(e) => {
             warn!("SAGA guidance query failed: {}", e);
-            Err(ApiError { code: 500, message: "Internal SAGA error".to_string(), details: None })
+            Err(ApiError {
+                code: 500,
+                message: "Internal SAGA error".to_string(),
+                details: None,
+            })
         }
     }
 }
 
-async fn info_handler(State(state): State<AppState>) -> Result<Json<serde_json::Value>, StatusCode> {
+async fn info_handler(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
     let mempool_read_guard = state.mempool.read().await;
     let utxos_read_guard = state.utxos.read().await;
     let tips_read_guard = state.dag.tips.read().await;
@@ -680,22 +793,42 @@ async fn info_handler(State(state): State<AppState>) -> Result<Json<serde_json::
     })))
 }
 
-async fn mempool_handler(State(state): State<AppState>) -> Result<Json<HashMap<String, Transaction>>, StatusCode> {
+async fn mempool_handler(
+    State(state): State<AppState>,
+) -> Result<Json<HashMap<String, Transaction>>, StatusCode> {
     let mempool_read_guard = state.mempool.read().await;
     Ok(Json(mempool_read_guard.get_transactions().await))
 }
 
-async fn publish_readiness_handler(State(state): State<AppState>) -> Result<Json<PublishReadiness>, StatusCode> {
+async fn publish_readiness_handler(
+    State(state): State<AppState>,
+) -> Result<Json<PublishReadiness>, StatusCode> {
     let mempool_read_guard = state.mempool.read().await;
     let utxos_read_guard = state.utxos.read().await;
     let blocks_read_guard = state.dag.blocks.read().await;
     let mut issues = vec![];
-    if blocks_read_guard.len() < 2 { issues.push("Insufficient blocks in DAG".to_string()); }
-    if utxos_read_guard.is_empty() { issues.push("No UTXOs available".to_string()); }
-    let latest_timestamp = blocks_read_guard.values().map(|b| b.timestamp).max().unwrap_or(0);
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    if blocks_read_guard.len() < 2 {
+        issues.push("Insufficient blocks in DAG".to_string());
+    }
+    if utxos_read_guard.is_empty() {
+        issues.push("No UTXOs available".to_string());
+    }
+    let latest_timestamp = blocks_read_guard
+        .values()
+        .map(|b| b.timestamp)
+        .max()
+        .unwrap_or(0);
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
     let is_synced = now.saturating_sub(latest_timestamp) < MAX_SYNC_AGE_SECONDS;
-    if !is_synced { issues.push(format!("Node is out of sync. Last block is {} seconds old.", now.saturating_sub(latest_timestamp))); }
+    if !is_synced {
+        issues.push(format!(
+            "Node is out of sync. Last block is {} seconds old.",
+            now.saturating_sub(latest_timestamp)
+        ));
+    }
     let is_ready = issues.is_empty();
     Ok(Json(PublishReadiness {
         is_ready,
@@ -708,54 +841,116 @@ async fn publish_readiness_handler(State(state): State<AppState>) -> Result<Json
     }))
 }
 
-async fn get_balance(State(state): State<AppState>, AxumPath(address): AxumPath<String>) -> Result<Json<u64>, ApiError> {
+async fn get_balance(
+    State(state): State<AppState>,
+    AxumPath(address): AxumPath<String>,
+) -> Result<Json<u64>, ApiError> {
     if !Regex::new(ADDRESS_REGEX).unwrap().is_match(&address) {
         warn!("Invalid address format for balance check: {address}");
-        return Err(ApiError { code: 400, message: "Invalid address format".to_string(), details: None });
+        return Err(ApiError {
+            code: 400,
+            message: "Invalid address format".to_string(),
+            details: None,
+        });
     }
     let utxos_read_guard = state.utxos.read().await;
-    let balance = utxos_read_guard.values().filter(|utxo_item| utxo_item.address == address).map(|utxo_item| utxo_item.amount).sum();
+    let balance = utxos_read_guard
+        .values()
+        .filter(|utxo_item| utxo_item.address == address)
+        .map(|utxo_item| utxo_item.amount)
+        .sum();
     Ok(Json(balance))
 }
 
-async fn get_utxos(State(state): State<AppState>, AxumPath(address): AxumPath<String>) -> Result<Json<HashMap<String, UTXO>>, ApiError> {
+async fn get_utxos(
+    State(state): State<AppState>,
+    AxumPath(address): AxumPath<String>,
+) -> Result<Json<HashMap<String, UTXO>>, ApiError> {
     if !Regex::new(ADDRESS_REGEX).unwrap().is_match(&address) {
         warn!("Invalid address format for UTXO fetch: {address}");
-        return Err(ApiError { code: 400, message: "Invalid address format".to_string(), details: None });
+        return Err(ApiError {
+            code: 400,
+            message: "Invalid address format".to_string(),
+            details: None,
+        });
     }
     let utxos_read_guard = state.utxos.read().await;
-    let filtered_utxos_map = utxos_read_guard.iter().filter(|(_, utxo_item)| utxo_item.address == address).map(|(key_str, value_utxo)| (key_str.clone(), value_utxo.clone())).collect();
+    let filtered_utxos_map = utxos_read_guard
+        .iter()
+        .filter(|(_, utxo_item)| utxo_item.address == address)
+        .map(|(key_str, value_utxo)| (key_str.clone(), value_utxo.clone()))
+        .collect();
     Ok(Json(filtered_utxos_map))
 }
 
-async fn submit_transaction(State(state): State<AppState>, Json(tx_data): Json<Transaction>) -> Result<Json<String>, ApiError> {
+async fn submit_transaction(
+    State(state): State<AppState>,
+    Json(tx_data): Json<Transaction>,
+) -> Result<Json<String>, ApiError> {
     let tx_hash_bytes = match hex::decode(&tx_data.id) {
         Ok(bytes) => bytes,
-        Err(_) => return Err(ApiError { code: 400, message: "Invalid transaction ID format".to_string(), details: None }),
+        Err(_) => {
+            return Err(ApiError {
+                code: 400,
+                message: "Invalid transaction ID format".to_string(),
+                details: None,
+            })
+        }
     };
     let tx_hash = H256::from_slice(&tx_hash_bytes);
     if !reflect_on_action(tx_hash).await {
         error!("ΛΣ-ΩMEGA rejected transaction {}", tx_data.id);
-        return Err(ApiError { code: 503, message: "System unstable, transaction rejected".to_string(), details: None });
+        return Err(ApiError {
+            code: 503,
+            message: "System unstable, transaction rejected".to_string(),
+            details: None,
+        });
     }
     let utxos_read_guard = state.utxos.read().await;
     if let Err(e) = tx_data.verify(&state.dag, &utxos_read_guard).await {
-        warn!("Transaction {} failed verification via API: {}", tx_data.id, e);
-        return Err(ApiError { code: 400, message: "Transaction verification failed".to_string(), details: Some(e.to_string()) });
+        warn!(
+            "Transaction {} failed verification via API: {}",
+            tx_data.id, e
+        );
+        return Err(ApiError {
+            code: 400,
+            message: "Transaction verification failed".to_string(),
+            details: Some(e.to_string()),
+        });
     }
     let tx_id = tx_data.id.clone();
-    if let Err(e) = state.p2p_command_sender.send(P2PCommand::BroadcastTransaction(tx_data)).await {
-        error!("Failed to broadcast transaction {} to P2P task: {}", tx_id, e);
-        return Err(ApiError { code: 500, message: "Internal server error".to_string(), details: None });
+    if let Err(e) = state
+        .p2p_command_sender
+        .send(P2PCommand::BroadcastTransaction(tx_data))
+        .await
+    {
+        error!(
+            "Failed to broadcast transaction {} to P2P task: {}",
+            tx_id, e
+        );
+        return Err(ApiError {
+            code: 500,
+            message: "Internal server error".to_string(),
+            details: None,
+        });
     }
     info!("Transaction {} submitted via API", tx_id);
     Ok(Json(tx_id))
 }
 
-async fn get_block(State(state): State<AppState>, AxumPath(id_str): AxumPath<String>) -> Result<Json<HyperBlock>, StatusCode> {
-    if id_str.len() > 128 || id_str.is_empty() { warn!("Invalid block ID length: {id_str}"); return Err(StatusCode::BAD_REQUEST); }
+async fn get_block(
+    State(state): State<AppState>,
+    AxumPath(id_str): AxumPath<String>,
+) -> Result<Json<HyperBlock>, StatusCode> {
+    if id_str.len() > 128 || id_str.is_empty() {
+        warn!("Invalid block ID length: {id_str}");
+        return Err(StatusCode::BAD_REQUEST);
+    }
     let blocks_read_guard = state.dag.blocks.read().await;
-    let block_data = blocks_read_guard.get(&id_str).cloned().ok_or(StatusCode::NOT_FOUND)?;
+    let block_data = blocks_read_guard
+        .get(&id_str)
+        .cloned()
+        .ok_or(StatusCode::NOT_FOUND)?;
     Ok(Json(block_data))
 }
 
@@ -765,7 +960,11 @@ async fn get_dag(State(state): State<AppState>) -> Result<Json<DagInfo>, StatusC
     let validators_read_guard = state.dag.validators.read().await;
     let difficulty_val = *state.dag.difficulty.read().await;
     let num_chains_val = *state.dag.num_chains.read().await;
-    let latest_block_timestamp = blocks_read_guard.values().map(|b| b.timestamp).max().unwrap_or(0);
+    let latest_block_timestamp = blocks_read_guard
+        .values()
+        .map(|b| b.timestamp)
+        .max()
+        .unwrap_or(0);
     Ok(Json(DagInfo {
         block_count: blocks_read_guard.len(),
         tip_count: tips_read_guard.values().map(|t_set| t_set.len()).sum(),
@@ -786,7 +985,7 @@ mod tests {
     use super::*;
     use crate::config::{LoggingConfig, P2pConfig};
     use crate::wallet::Wallet;
-    use rand::Rng;
+    use rand::Rng; // Import Rng trait
     use serial_test::serial;
     use std::fs as std_fs;
 
@@ -794,12 +993,14 @@ mod tests {
     #[serial]
     async fn test_node_creation_and_config_save() {
         let db_path = "hyperdag_db_test_node_creation";
-        if std::path::Path::new(db_path).exists() { std::fs::remove_dir_all(db_path).unwrap(); }
+        if std::path::Path::new(db_path).exists() {
+            std_fs::remove_dir_all(db_path).unwrap();
+        }
         let _ = tracing_subscriber::fmt::try_init();
         let wallet = Wallet::new().expect("Failed to create new wallet for test");
         let wallet_arc = Arc::new(wallet);
         let genesis_validator_addr = wallet_arc.address();
-        let rand_id: u32 = rand::Rng::gen();
+        let rand_id: u32 = rand::thread_rng().gen(); // Use thread_rng()
         let temp_config_path = format!("./temp_test_config_{rand_id}.toml");
         let temp_identity_path = format!("./temp_p2p_identity_{rand_id}.key");
         let temp_peer_cache_path = format!("./temp_peer_cache_{rand_id}.json");
@@ -812,14 +1013,20 @@ mod tests {
             target_block_time: 60,
             difficulty: 1, // Lower difficulty for faster testing
             max_amount: 10_000_000_000,
-            use_gpu: false, zk_enabled: false, mining_threads: 1,
+            use_gpu: false,
+            zk_enabled: false,
+            mining_threads: 1,
             num_chains: 1,
-            logging: LoggingConfig { level: "debug".to_string(), },
+            logging: LoggingConfig {
+                level: "debug".to_string(),
+            },
             p2p: P2pConfig::default(),
             network_id: "testnet".to_string(),
         };
-        test_config.save(&temp_config_path).expect("Failed to save initial temp config for test");
-        
+        test_config
+            .save(&temp_config_path)
+            .expect("Failed to save initial temp config for test");
+
         let node_instance_result = Node::new(
             test_config,
             temp_config_path.clone(),
@@ -829,9 +1036,15 @@ mod tests {
         )
         .await;
 
-        if std::path::Path::new(db_path).exists() { std::fs::remove_dir_all(db_path).unwrap(); }
+        if std::path::Path::new(db_path).exists() {
+            std_fs::remove_dir_all(db_path).unwrap();
+        }
 
-        assert!(node_instance_result.is_ok(), "Node::new failed: {:?}", node_instance_result.err());
+        assert!(
+            node_instance_result.is_ok(),
+            "Node::new failed: {:?}",
+            node_instance_result.err()
+        );
 
         let _ = std_fs::remove_file(&temp_config_path);
         let _ = std_fs::remove_file(&temp_identity_path);

@@ -1,6 +1,4 @@
-use crate::hyperdag::{
-    HomomorphicEncrypted, HyperDAG, LatticeSignature, UTXO,
-};
+use crate::hyperdag::{HomomorphicEncrypted, HyperDAG, LatticeSignature, UTXO};
 use crate::omega;
 use hex;
 use serde::{Deserialize, Serialize};
@@ -24,7 +22,6 @@ const FEE_TIER2_THRESHOLD: u64 = 100_000_000;
 const FEE_RATE_TIER1: f64 = 0.01; // 1%
 const FEE_RATE_TIER2: f64 = 0.02; // 2%
 const FEE_RATE_TIER3: f64 = 0.03; // 3%
-
 
 #[derive(Error, Debug)]
 pub enum TransactionError {
@@ -121,39 +118,97 @@ pub fn calculate_dynamic_fee(amount: u64) -> u64 {
     (amount as f64 * rate).round() as u64
 }
 
-
 impl Transaction {
     #[instrument(skip(config))]
     pub async fn new(config: TransactionConfig<'_>) -> Result<Self, TransactionError> {
-        Self::validate_structure_pre_creation(&config.sender, &config.receiver, config.amount, &config.inputs, config.metadata.as_ref())?;
+        Self::validate_structure_pre_creation(
+            &config.sender,
+            &config.receiver,
+            config.amount,
+            &config.inputs,
+            config.metadata.as_ref(),
+        )?;
         Self::check_rate_limit(&config.tx_timestamps, MAX_TRANSACTIONS_PER_MINUTE).await?;
         Self::validate_addresses(&config.sender, &config.receiver, &config.outputs)?;
         let timestamp = Self::get_current_timestamp()?;
         let metadata = config.metadata.unwrap_or_default();
-        let signing_payload = TransactionSigningPayload { sender: &config.sender, receiver: &config.receiver, amount: config.amount, fee: config.fee, inputs: &config.inputs, outputs: &config.outputs, metadata: &metadata, timestamp };
+        let signing_payload = TransactionSigningPayload {
+            sender: &config.sender,
+            receiver: &config.receiver,
+            amount: config.amount,
+            fee: config.fee,
+            inputs: &config.inputs,
+            outputs: &config.outputs,
+            metadata: &metadata,
+            timestamp,
+        };
         let signature_data = Self::serialize_for_signing(&signing_payload)?;
-        let action_hash = H256::from_slice(Keccak512::digest(&signature_data).as_slice()[..32].as_ref());
-        if !omega::reflect_on_action(action_hash).await { return Err(TransactionError::OmegaRejection); }
-        let signature_obj = LatticeSignature::sign(config.signing_key_bytes, &signature_data).map_err(|_| TransactionError::LatticeSignatureVerification)?;
-        let mut tx = Self { id: String::new(), sender: config.sender, receiver: config.receiver, amount: config.amount, fee: config.fee, inputs: config.inputs, outputs: config.outputs, lattice_signature: signature_obj.signature, public_key: signature_obj.public_key, timestamp, metadata };
+        let action_hash =
+            H256::from_slice(Keccak512::digest(&signature_data).as_slice()[..32].as_ref());
+        if !omega::reflect_on_action(action_hash).await {
+            return Err(TransactionError::OmegaRejection);
+        }
+        let signature_obj = LatticeSignature::sign(config.signing_key_bytes, &signature_data)
+            .map_err(|_| TransactionError::LatticeSignatureVerification)?;
+        let mut tx = Self {
+            id: String::new(),
+            sender: config.sender,
+            receiver: config.receiver,
+            amount: config.amount,
+            fee: config.fee,
+            inputs: config.inputs,
+            outputs: config.outputs,
+            lattice_signature: signature_obj.signature,
+            public_key: signature_obj.public_key,
+            timestamp,
+            metadata,
+        };
         tx.id = tx.compute_hash();
         let mut timestamps_guard = config.tx_timestamps.write().await;
         timestamps_guard.insert(tx.id.clone(), timestamp);
         if timestamps_guard.len() > (MAX_TRANSACTIONS_PER_MINUTE * 2) as usize {
             let current_time = Self::get_current_timestamp().unwrap_or(0);
-            timestamps_guard.retain(|_, &mut stored_ts| current_time.saturating_sub(stored_ts) < 3600);
+            timestamps_guard
+                .retain(|_, &mut stored_ts| current_time.saturating_sub(stored_ts) < 3600);
         }
         Ok(tx)
     }
 
-    pub(crate) fn new_coinbase(receiver: String, reward: u64, signing_key_bytes: &[u8], outputs: Vec<Output>) -> Result<Self, TransactionError> {
+    pub(crate) fn new_coinbase(
+        receiver: String,
+        reward: u64,
+        signing_key_bytes: &[u8],
+        outputs: Vec<Output>,
+    ) -> Result<Self, TransactionError> {
         let sender = "0000000000000000000000000000000000000000000000000000000000000000".to_string();
         let timestamp = Self::get_current_timestamp()?;
         let metadata = HashMap::new();
-        let signing_payload = TransactionSigningPayload { sender: &sender, receiver: &receiver, amount: reward, fee: 0, inputs: &[], outputs: &outputs, metadata: &metadata, timestamp };
+        let signing_payload = TransactionSigningPayload {
+            sender: &sender,
+            receiver: &receiver,
+            amount: reward,
+            fee: 0,
+            inputs: &[],
+            outputs: &outputs,
+            metadata: &metadata,
+            timestamp,
+        };
         let signature_data = Self::serialize_for_signing(&signing_payload)?;
-        let signature_obj = LatticeSignature::sign(signing_key_bytes, &signature_data).map_err(|_| TransactionError::LatticeSignatureVerification)?;
-        let mut tx = Self { id: String::new(), sender, receiver, amount: reward, fee: 0, inputs: vec![], outputs, lattice_signature: signature_obj.signature, public_key: signature_obj.public_key, timestamp, metadata };
+        let signature_obj = LatticeSignature::sign(signing_key_bytes, &signature_data)
+            .map_err(|_| TransactionError::LatticeSignatureVerification)?;
+        let mut tx = Self {
+            id: String::new(),
+            sender,
+            receiver,
+            amount: reward,
+            fee: 0,
+            inputs: vec![],
+            outputs,
+            lattice_signature: signature_obj.signature,
+            public_key: signature_obj.public_key,
+            timestamp,
+            metadata,
+        };
         tx.id = tx.compute_hash();
         Ok(tx)
     }
@@ -168,52 +223,109 @@ impl Transaction {
         &self.metadata
     }
 
-    fn validate_structure_pre_creation(sender: &str, receiver: &str, amount: u64, inputs: &[Input], metadata: Option<&HashMap<String, String>>) -> Result<(), TransactionError> {
-        if sender.is_empty() { return Err(TransactionError::InvalidStructure("Sender cannot be empty".to_string())); }
-        if receiver.is_empty() { return Err(TransactionError::InvalidStructure("Receiver cannot be empty".to_string())); }
-        if amount == 0 && !inputs.is_empty() { return Err(TransactionError::InvalidStructure("Amount cannot be zero for regular transactions".to_string())); }
+    fn validate_structure_pre_creation(
+        sender: &str,
+        receiver: &str,
+        amount: u64,
+        inputs: &[Input],
+        metadata: Option<&HashMap<String, String>>,
+    ) -> Result<(), TransactionError> {
+        if sender.is_empty() {
+            return Err(TransactionError::InvalidStructure(
+                "Sender cannot be empty".to_string(),
+            ));
+        }
+        if receiver.is_empty() {
+            return Err(TransactionError::InvalidStructure(
+                "Receiver cannot be empty".to_string(),
+            ));
+        }
+        if amount == 0 && !inputs.is_empty() {
+            return Err(TransactionError::InvalidStructure(
+                "Amount cannot be zero for regular transactions".to_string(),
+            ));
+        }
         if let Some(md) = metadata {
-            if md.len() > MAX_METADATA_PAIRS { return Err(TransactionError::InvalidMetadata(format!("Exceeded max metadata pairs limit of {MAX_METADATA_PAIRS}"))); }
+            if md.len() > MAX_METADATA_PAIRS {
+                return Err(TransactionError::InvalidMetadata(format!(
+                    "Exceeded max metadata pairs limit of {MAX_METADATA_PAIRS}"
+                )));
+            }
             for (k, v) in md {
-                if k.len() > MAX_METADATA_KEY_LEN || v.len() > MAX_METADATA_VALUE_LEN { return Err(TransactionError::InvalidMetadata(format!("Metadata key/value length exceeded"))); }
+                if k.len() > MAX_METADATA_KEY_LEN || v.len() > MAX_METADATA_VALUE_LEN {
+                    return Err(TransactionError::InvalidMetadata(
+                        "Metadata key/value length exceeded".to_string(),
+                    ));
+                }
             }
         }
         Ok(())
     }
 
-    async fn check_rate_limit(tx_timestamps: &Arc<RwLock<HashMap<String, u64>>>, max_txs: u64) -> Result<(), TransactionError> {
+    async fn check_rate_limit(
+        tx_timestamps: &Arc<RwLock<HashMap<String, u64>>>,
+        max_txs: u64,
+    ) -> Result<(), TransactionError> {
         let now = Self::get_current_timestamp()?;
         let timestamps_guard = tx_timestamps.read().await;
-        let recent_tx_count = timestamps_guard.values().filter(|&&t| now.saturating_sub(t) < 60).count() as u64;
-        if recent_tx_count >= max_txs { return Err(TransactionError::RateLimitExceeded); }
+        let recent_tx_count = timestamps_guard
+            .values()
+            .filter(|&&t| now.saturating_sub(t) < 60)
+            .count() as u64;
+        if recent_tx_count >= max_txs {
+            return Err(TransactionError::RateLimitExceeded);
+        }
         Ok(())
     }
 
-    fn validate_addresses(sender: &str, receiver: &str, outputs: &[Output]) -> Result<(), TransactionError> {
-        if !Self::is_valid_address(sender) || !Self::is_valid_address(receiver) || outputs.iter().any(|o| !Self::is_valid_address(&o.address)) {
+    fn validate_addresses(
+        sender: &str,
+        receiver: &str,
+        outputs: &[Output],
+    ) -> Result<(), TransactionError> {
+        if !Self::is_valid_address(sender)
+            || !Self::is_valid_address(receiver)
+            || outputs.iter().any(|o| !Self::is_valid_address(&o.address))
+        {
             Err(TransactionError::InvalidAddress)
         } else {
             Ok(())
         }
     }
 
-    fn is_valid_address(address: &str) -> bool { address.len() == 64 && hex::decode(address).is_ok() }
-
-    fn get_current_timestamp() -> Result<u64, TransactionError> {
-        SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).map_err(|_| TransactionError::TimestampError)
+    fn is_valid_address(address: &str) -> bool {
+        address.len() == 64 && hex::decode(address).is_ok()
     }
 
-    fn serialize_for_signing(payload: &TransactionSigningPayload) -> Result<Vec<u8>, TransactionError> {
+    fn get_current_timestamp() -> Result<u64, TransactionError> {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .map_err(|_| TransactionError::TimestampError)
+    }
+
+    fn serialize_for_signing(
+        payload: &TransactionSigningPayload,
+    ) -> Result<Vec<u8>, TransactionError> {
         let mut hasher = Keccak512::new();
         hasher.update(payload.sender.as_bytes());
         hasher.update(payload.receiver.as_bytes());
         hasher.update(payload.amount.to_be_bytes());
         hasher.update(payload.fee.to_be_bytes());
-        payload.inputs.iter().for_each(|i| { hasher.update(i.tx_id.as_bytes()); hasher.update(i.output_index.to_be_bytes()); });
-        payload.outputs.iter().for_each(|o| { hasher.update(o.address.as_bytes()); hasher.update(o.amount.to_be_bytes()); });
+        payload.inputs.iter().for_each(|i| {
+            hasher.update(i.tx_id.as_bytes());
+            hasher.update(i.output_index.to_be_bytes());
+        });
+        payload.outputs.iter().for_each(|o| {
+            hasher.update(o.address.as_bytes());
+            hasher.update(o.amount.to_be_bytes());
+        });
         let mut sorted_metadata: Vec<_> = payload.metadata.iter().collect();
         sorted_metadata.sort_by_key(|(k, _)| *k);
-        sorted_metadata.iter().for_each(|(k, v)| { hasher.update(k.as_bytes()); hasher.update(v.as_bytes()); });
+        sorted_metadata.iter().for_each(|(k, v)| {
+            hasher.update(k.as_bytes());
+            hasher.update(v.as_bytes());
+        });
         hasher.update(payload.timestamp.to_be_bytes());
         Ok(hasher.finalize().to_vec())
     }
@@ -224,36 +336,79 @@ impl Transaction {
         hasher.update(self.receiver.as_bytes());
         hasher.update(self.amount.to_be_bytes());
         hasher.update(self.fee.to_be_bytes());
-        self.inputs.iter().for_each(|i| { hasher.update(i.tx_id.as_bytes()); hasher.update(i.output_index.to_be_bytes()); });
-        self.outputs.iter().for_each(|o| { hasher.update(o.address.as_bytes()); hasher.update(o.amount.to_be_bytes()); });
+        self.inputs.iter().for_each(|i| {
+            hasher.update(i.tx_id.as_bytes());
+            hasher.update(i.output_index.to_be_bytes());
+        });
+        self.outputs.iter().for_each(|o| {
+            hasher.update(o.address.as_bytes());
+            hasher.update(o.amount.to_be_bytes());
+        });
         let mut sorted_metadata: Vec<_> = self.metadata.iter().collect();
         sorted_metadata.sort_by_key(|(k, _)| *k);
-        sorted_metadata.iter().for_each(|(k, v)| { hasher.update(k.as_bytes()); hasher.update(v.as_bytes()); });
+        sorted_metadata.iter().for_each(|(k, v)| {
+            hasher.update(k.as_bytes());
+            hasher.update(v.as_bytes());
+        });
         hasher.update(self.timestamp.to_be_bytes());
         hex::encode(&hasher.finalize()[..32])
     }
 
     #[instrument(skip(self, _dag, utxos))]
-    pub async fn verify(&self, _dag: &HyperDAG, utxos: &HashMap<String, UTXO>) -> Result<(), TransactionError> {
-        let verifier_sig = LatticeSignature { public_key: self.public_key.clone(), signature: self.lattice_signature.clone() };
-        let signing_payload = TransactionSigningPayload { sender: &self.sender, receiver: &self.receiver, amount: self.amount, fee: self.fee, inputs: &self.inputs, outputs: &self.outputs, metadata: &self.metadata, timestamp: self.timestamp };
+    pub async fn verify(
+        &self,
+        _dag: &HyperDAG,
+        utxos: &HashMap<String, UTXO>,
+    ) -> Result<(), TransactionError> {
+        let verifier_sig = LatticeSignature {
+            public_key: self.public_key.clone(),
+            signature: self.lattice_signature.clone(),
+        };
+        let signing_payload = TransactionSigningPayload {
+            sender: &self.sender,
+            receiver: &self.receiver,
+            amount: self.amount,
+            fee: self.fee,
+            inputs: &self.inputs,
+            outputs: &self.outputs,
+            metadata: &self.metadata,
+            timestamp: self.timestamp,
+        };
         let data_to_verify = Self::serialize_for_signing(&signing_payload)?;
-        if !verifier_sig.verify(&data_to_verify) { return Err(TransactionError::LatticeSignatureVerification); }
+        if !verifier_sig.verify(&data_to_verify) {
+            return Err(TransactionError::LatticeSignatureVerification);
+        }
         if self.is_coinbase() {
-            if self.fee != 0 { return Err(TransactionError::InvalidStructure("Coinbase fee must be 0".to_string())); }
+            if self.fee != 0 {
+                return Err(TransactionError::InvalidStructure(
+                    "Coinbase fee must be 0".to_string(),
+                ));
+            }
             let total_output: u64 = self.outputs.iter().map(|o| o.amount).sum();
-            if total_output == 0 { return Err(TransactionError::InvalidStructure("Coinbase output cannot be zero".to_string())); }
+            if total_output == 0 {
+                return Err(TransactionError::InvalidStructure(
+                    "Coinbase output cannot be zero".to_string(),
+                ));
+            }
         } else {
             let mut total_input_value = 0;
             for input in &self.inputs {
                 let utxo_id = format!("{}_{}", input.tx_id, input.output_index);
-                let utxo = utxos.get(&utxo_id).ok_or_else(|| TransactionError::InvalidStructure(format!("UTXO {utxo_id} not found")))?;
-                if utxo.address != self.sender { return Err(TransactionError::InvalidStructure(format!("Input UTXO {} does not belong to sender", utxo_id))); }
+                let utxo = utxos.get(&utxo_id).ok_or_else(|| {
+                    TransactionError::InvalidStructure(format!("UTXO {utxo_id} not found"))
+                })?;
+                if utxo.address != self.sender {
+                    return Err(TransactionError::InvalidStructure(format!(
+                        "Input UTXO {utxo_id} does not belong to sender"
+                    )));
+                }
                 total_input_value += utxo.amount;
             }
             let total_output_value: u64 = self.outputs.iter().map(|o| o.amount).sum();
-            
-            if total_input_value < total_output_value + self.fee { return Err(TransactionError::InsufficientFunds); }
+
+            if total_input_value < total_output_value + self.fee {
+                return Err(TransactionError::InsufficientFunds);
+            }
         }
         Ok(())
     }
@@ -262,21 +417,37 @@ impl Transaction {
     pub fn generate_utxo(&self, index: u32) -> UTXO {
         let output = &self.outputs[index as usize];
         let utxo_id = format!("{}_{}", self.id, index);
-        UTXO { address: output.address.clone(), amount: output.amount, tx_id: self.id.clone(), output_index: index, explorer_link: format!("https://hyperblockexplorer.org/utxo/{utxo_id}") }
+        UTXO {
+            address: output.address.clone(),
+            amount: output.amount,
+            tx_id: self.id.clone(),
+            output_index: index,
+            explorer_link: format!("https://hyperblockexplorer.org/utxo/{utxo_id}"),
+        }
     }
 }
 
 impl Zeroize for Transaction {
     fn zeroize(&mut self) {
-        self.id.zeroize(); self.sender.zeroize(); self.receiver.zeroize();
-        self.amount = 0; self.fee = 0;
-        self.inputs.clear(); self.outputs.clear();
-        self.lattice_signature.zeroize(); self.public_key.zeroize();
-        self.timestamp = 0; self.metadata.clear();
+        self.id.zeroize();
+        self.sender.zeroize();
+        self.receiver.zeroize();
+        self.amount = 0;
+        self.fee = 0;
+        self.inputs.clear();
+        self.outputs.clear();
+        self.lattice_signature.zeroize();
+        self.public_key.zeroize();
+        self.timestamp = 0;
+        self.metadata.clear();
     }
 }
 
-impl Drop for Transaction { fn drop(&mut self) { self.zeroize(); } }
+impl Drop for Transaction {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -339,7 +510,8 @@ mod tests {
         }];
         if dev_fee_on_transfer > 0 {
             outputs_for_tx.push(Output {
-                address: "2119707c4caf16139cfb5c09c4dcc9bf9cfe6808b571c108d739f49cc14793b9".to_string(), // DEV_ADDRESS
+                address: "2119707c4caf16139cfb5c09c4dcc9bf9cfe6808b571c108d739f49cc14793b9"
+                    .to_string(), // DEV_ADDRESS
                 amount: dev_fee_on_transfer,
                 homomorphic_encrypted: HomomorphicEncrypted::new(
                     dev_fee_on_transfer,
@@ -378,16 +550,22 @@ mod tests {
 
         let tx = Transaction::new(tx_config).await?;
 
-        let saga_pallet = Arc::new(PalletSaga::new());
-        let dag_arc = Arc::new(HyperDAG::new(
-            &sender_address,
-            60000,
-            100,
-            1,
-            signing_key_bytes_slice,
-            saga_pallet,
-        )
-        .await?);
+        let saga_pallet = Arc::new(PalletSaga::new(
+            #[cfg(feature = "infinite-strata")]
+            None,
+        ));
+        let dag_arc = Arc::new(
+            HyperDAG::new(
+                &sender_address,
+                60000,
+                100,
+                1,
+                signing_key_bytes_slice,
+                saga_pallet,
+                rocksdb::DB::open_default("hyperdag_db_test").unwrap(),
+            )
+            .await?,
+        );
 
         let utxos_arc_for_test = Arc::new(RwLock::new(initial_utxos_map));
         let utxos_read_guard = utxos_arc_for_test.read().await;

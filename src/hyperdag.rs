@@ -3,9 +3,9 @@
 
 use crate::emission::Emission;
 use crate::mempool::Mempool;
+use crate::miner::Miner; // Moved this import to match formatting suggestions
 use crate::saga::{CarbonOffsetCredential, GovernanceProposal, PalletSaga, ProposalType};
 use crate::transaction::Transaction;
-use crate::miner::Miner;
 use crate::wallet::Wallet;
 use ed25519_dalek::{Signature as DalekSignature, Signer, SigningKey, Verifier, VerifyingKey};
 use hex;
@@ -42,7 +42,6 @@ const MIN_VALIDATOR_STAKE: u64 = 50;
 const SLASHING_PENALTY: u64 = 30;
 const CACHE_SIZE: usize = 1_000;
 const ANOMALY_DETECTION_BASELINE_BLOCKS: usize = 20;
-
 
 lazy_static::lazy_static! {
     static ref BLOCKS_PROCESSED: IntCounter = register_int_counter!("blocks_processed_total", "Total blocks processed").unwrap();
@@ -201,7 +200,7 @@ impl HomomorphicEncrypted {
 
     #[instrument]
     pub fn decrypt(&self, _private_key_material: &[u8]) -> Result<u64, HyperDAGError> {
-        if self.encrypted_amount == hex::encode(Keccak256::digest(&0u64.to_be_bytes())) {
+        if self.encrypted_amount == hex::encode(Keccak256::digest(0u64.to_be_bytes())) {
             Ok(0)
         } else {
             Err(HyperDAGError::HomomorphicError(
@@ -327,21 +326,14 @@ impl fmt::Display for HyperBlock {
             .map(|c| c.tonnes_co2_sequestered)
             .sum();
         if total_offset > 0.0 {
-            writeln!(
-                f,
-                "║ 🌍 Carbon Offset:  {total_offset:.4} tonnes CO₂e"
-            )?;
+            writeln!(f, "║ 🌍 Carbon Offset:  {total_offset:.4} tonnes CO₂e")?;
         }
         writeln!(f, "║ 🌳 Merkle Root:    {}", self.merkle_root)?;
         writeln!(f, "╟─ Mining Details ─{}╢", "─".repeat(70))?;
         writeln!(f, "║ ⛏️  Miner:           {}", self.miner)?;
         writeln!(f, "║ ✨ Nonce:          {}", self.nonce)?;
         writeln!(f, "║ 💪 Effort:         {} hashes", self.effort)?;
-        writeln!(
-            f,
-            "║ 💰 Block Reward:    {} $HCN (from SAGA)",
-            self.reward
-        )?;
+        writeln!(f, "║ 💰 Block Reward:    {} $HCN (from SAGA)", self.reward)?;
         writeln!(f, "╚{border}╝")?;
         Ok(())
     }
@@ -563,12 +555,12 @@ impl HyperDAG {
             self_arc: Weak::new(),
             current_epoch: Arc::new(RwLock::new(0)),
         };
-        
+
         let arc_dag = Arc::new(dag);
         let weak_self = Arc::downgrade(&arc_dag);
-        
+
         let ptr = Arc::as_ptr(&arc_dag) as *mut HyperDAG;
-        
+
         unsafe {
             (*ptr).self_arc = weak_self;
         }
@@ -586,7 +578,10 @@ impl HyperDAG {
         miner: Arc<Miner>,
         mining_interval_secs: u64,
     ) {
-        info!("SOLO MINER: Starting proactive mining loop with an interval of {} seconds.", mining_interval_secs);
+        info!(
+            "SOLO MINER: Starting proactive mining loop with an interval of {} seconds.",
+            mining_interval_secs
+        );
 
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(mining_interval_secs)).await;
@@ -596,46 +591,73 @@ impl HyperDAG {
             let signing_key = match wallet.get_signing_key() {
                 Ok(key) => key,
                 Err(e) => {
-                    warn!("SOLO MINER: Could not get signing key, skipping cycle. Error: {}", e);
+                    warn!(
+                        "SOLO MINER: Could not get signing key, skipping cycle. Error: {}",
+                        e
+                    );
                     continue;
                 }
             };
-            
+
             let chain_id_to_mine: u32 = 0;
 
-            let mut candidate_block = match self.create_candidate_block(
-                &signing_key.to_bytes(),
-                &miner_address,
-                &mempool,
-                &utxos,
-                chain_id_to_mine
-            ).await {
+            let mut candidate_block = match self
+                .create_candidate_block(
+                    &signing_key.to_bytes(),
+                    &miner_address,
+                    &mempool,
+                    &utxos,
+                    chain_id_to_mine,
+                )
+                .await
+            {
                 Ok(block) => {
-                    info!("SOLO MINER: Successfully created candidate block {}.", block.id);
+                    info!(
+                        "SOLO MINER: Successfully created candidate block {}.",
+                        block.id
+                    );
                     block
-                },
+                }
                 Err(e) => {
-                    warn!("SOLO MINER: Failed to create candidate block: {}. Retrying after delay.", e);
+                    warn!(
+                        "SOLO MINER: Failed to create candidate block: {}. Retrying after delay.",
+                        e
+                    );
                     continue;
                 }
             };
-            
-            info!("SOLO MINER: Starting proof-of-work for candidate block {}...", candidate_block.id);
+
+            info!(
+                "SOLO MINER: Starting proof-of-work for candidate block {}...",
+                candidate_block.id
+            );
             if let Err(e) = miner.solve_pow(&mut candidate_block) {
-                warn!("SOLO MINER: Mining failed for the current candidate block: {}", e);
+                warn!(
+                    "SOLO MINER: Mining failed for the current candidate block: {}",
+                    e
+                );
                 continue;
             }
 
             let mined_block = candidate_block;
-            info!("SOLO MINER: Successfully mined block with ID: {}", mined_block.id);
-            println!("{}", mined_block);
+            info!(
+                "SOLO MINER: Successfully mined block with ID: {}",
+                mined_block.id
+            );
+            println!("{mined_block}"); // Removed extra space based on format diff
 
             match self.add_block(mined_block.clone(), &utxos).await {
                 Ok(true) => {
                     info!("SOLO MINER: Successfully added new block to the HyperDAG.");
-                    mempool.read().await.remove_transactions(&mined_block.transactions).await;
-                },
-                Ok(false) => warn!("SOLO MINER: Mined block was rejected by the DAG (already exists?)."),
+                    mempool
+                        .read()
+                        .await
+                        .remove_transactions(&mined_block.transactions)
+                        .await;
+                }
+                Ok(false) => {
+                    warn!("SOLO MINER: Mined block was rejected by the DAG (already exists?).")
+                }
                 Err(e) => warn!("SOLO MINER: Failed to add mined block to DAG: {}", e),
             }
         }
@@ -925,7 +947,7 @@ impl HyperDAG {
             .calculate_dynamic_reward(&temp_block_for_reward_calc, &self_arc_strong)
             .await?;
 
-        let dev_fee = (reward as f64 * DEV_FEE_RATE) as u64;
+        let dev_fee = (reward as f64 * DEV_FEE_RATE).round() as u64;
         let miner_reward = reward.saturating_sub(dev_fee);
         let reward_tx_signature =
             LatticeSignature::sign(validator_signing_key, &new_timestamp.to_be_bytes())?;
@@ -990,8 +1012,12 @@ impl HyperDAG {
             .write()
             .await
             .insert(block.id.clone(), new_timestamp);
-        *self.chain_loads.write().await.entry(chain_id_val).or_insert(0) +=
-            block.transactions.len() as u64;
+        *self
+            .chain_loads
+            .write()
+            .await
+            .entry(chain_id_val)
+            .or_insert(0) += block.transactions.len() as u64;
 
         Ok(block)
     }
@@ -1014,8 +1040,7 @@ impl HyperDAG {
         }
 
         let serialized_size = serde_json::to_vec(&block)?.len();
-        if block.transactions.len() > MAX_TRANSACTIONS_PER_BLOCK
-            || serialized_size > MAX_BLOCK_SIZE
+        if block.transactions.len() > MAX_TRANSACTIONS_PER_BLOCK || serialized_size > MAX_BLOCK_SIZE
         {
             return Err(HyperDAGError::InvalidBlock(format!(
                 "Block exceeds size limits: {} txns, {} bytes",
@@ -1034,18 +1059,13 @@ impl HyperDAG {
 
         let target_hash_bytes = Miner::calculate_target_from_difficulty(block.difficulty);
         let block_pow_hash = block.hash();
-        if !Miner::hash_meets_target(
-            &hex::decode(block_pow_hash).unwrap(),
-            &target_hash_bytes,
-        ) {
+        if !Miner::hash_meets_target(&hex::decode(block_pow_hash).unwrap(), &target_hash_bytes) {
             return Err(HyperDAGError::InvalidBlock(
                 "Proof-of-Work not satisfied".to_string(),
             ));
         }
 
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)?
-            .as_secs();
+        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
         if block.timestamp > now + TEMPORAL_CONSENSUS_WINDOW {
             return Err(HyperDAGError::InvalidBlock(format!(
                 "Timestamp {} is too far in the future",
@@ -1072,7 +1092,7 @@ impl HyperDAG {
                     )));
                 }
             }
-            
+
             for (_ref_chain_id, ref_block_id) in &block.cross_chain_references {
                 if !blocks_guard.contains_key(ref_block_id) {
                     return Err(HyperDAGError::CrossChainReferenceError(format!(
@@ -1094,13 +1114,13 @@ impl HyperDAG {
             .self_arc
             .upgrade()
             .ok_or(HyperDAGError::SelfReferenceNotInitialized)?;
-        let expected_reward = self.saga.calculate_dynamic_reward(block, &self_arc_strong).await?;
+        let expected_reward = self
+            .saga
+            .calculate_dynamic_reward(block, &self_arc_strong)
+            .await?;
 
         if block.reward != expected_reward {
-            return Err(HyperDAGError::RewardMismatch(
-                expected_reward,
-                block.reward,
-            ));
+            return Err(HyperDAGError::RewardMismatch(expected_reward, block.reward));
         }
 
         if total_coinbase_output != block.reward {
@@ -1144,11 +1164,14 @@ impl HyperDAG {
             / (blocks_guard.len() as f64);
 
         if avg_tx_count < 1.0 {
-            return if block.transactions.len() > 10 { Ok(1.0) } else { Ok(0.0) };
+            return if block.transactions.len() > 10 {
+                Ok(1.0)
+            } else {
+                Ok(0.0)
+            };
         }
 
-        let anomaly_score =
-            (block.transactions.len() as f64 - avg_tx_count).abs() / avg_tx_count;
+        let anomaly_score = (block.transactions.len() as f64 - avg_tx_count).abs() / avg_tx_count;
         Ok(anomaly_score)
     }
 
@@ -1287,9 +1310,7 @@ impl HyperDAG {
             chain_loads_guard.insert(chain_id_to_split, new_load_for_old);
             chain_loads_guard.insert(new_chain_id, new_load_for_new);
 
-            let new_genesis_timestamp = SystemTime::now()
-                .duration_since(UNIX_EPOCH)?
-                .as_secs();
+            let new_genesis_timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
             let mut genesis_block = HyperBlock::new(HyperBlockCreationData {
                 chain_id: new_chain_id,
                 parents: vec![],
@@ -1326,11 +1347,9 @@ impl HyperDAG {
     ) -> Result<String, HyperDAGError> {
         {
             let validators_guard = self.validators.read().await;
-            let stake = validators_guard
-                .get(&proposer_address)
-                .ok_or_else(|| {
-                    HyperDAGError::Governance("Proposer not found or has no stake".to_string())
-                })?;
+            let stake = validators_guard.get(&proposer_address).ok_or_else(|| {
+                HyperDAGError::Governance("Proposer not found or has no stake".to_string())
+            })?;
             if *stake < MIN_VALIDATOR_STAKE * 10 {
                 return Err(HyperDAGError::Governance(
                     "Insufficient stake to create a governance proposal.".to_string(),
@@ -1497,9 +1516,9 @@ impl HyperDAG {
         let mut epoch_guard = self.current_epoch.write().await;
         *epoch_guard += 1;
         let current_epoch = *epoch_guard;
-        
+
         self.saga.process_epoch_evolution(current_epoch, self).await;
-        
+
         info!("Periodic DAG maintenance complete for epoch {current_epoch}.");
     }
 }
@@ -1521,7 +1540,7 @@ impl Clone for HyperDAG {
             anomaly_history: self.anomaly_history.clone(),
             cross_chain_swaps: self.cross_chain_swaps.clone(),
             smart_contracts: self.smart_contracts.clone(),
-	    cache: self.cache.clone(),
+            cache: self.cache.clone(),
             db: self.db.clone(),
             saga: self.saga.clone(),
             self_arc: self.self_arc.clone(),

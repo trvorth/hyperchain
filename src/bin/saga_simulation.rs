@@ -38,17 +38,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     opts.create_if_missing(true);
     let db = DB::open(&opts, db_path)?;
 
-    let dag_arc = Arc::new(
-        HyperDAG::new(
-            &validator_address,
-            60, // target block time (seconds)
-            10, // initial difficulty
-            1,  // number of chains
-            &validator_wallet.get_signing_key()?.to_bytes(),
-            saga_pallet.clone(),
-            db,
-        )?,
-    );
+    let dag_arc = Arc::new(HyperDAG::new(
+        &validator_address,
+        60, // target block time (seconds)
+        10, // initial difficulty
+        1,  // number of chains
+        &validator_wallet.get_signing_key()?.to_bytes(),
+        saga_pallet.clone(),
+        db,
+    )?);
     println!("SAGA and HyperDAG initialized.");
 
     // 3. Mempool and UTXO Set
@@ -75,10 +73,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let he_pub_key_material: &[u8] = he_public_key.as_bytes();
 
     let mut metadata = HashMap::new();
-    metadata.insert(
-        "intent".to_string(),
-        "Simulation Test Transfer".to_string(),
-    );
+    metadata.insert("intent".to_string(), "Simulation Test Transfer".to_string());
     metadata.insert(
         "origin_component".to_string(),
         "saga_simulation".to_string(),
@@ -177,7 +172,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 7. Process an epoch to see SAGA's autonomous functions
     println!("\n--- Processing Epoch 1 Evolution ---");
     let current_epoch = *dag_arc.current_epoch.read().await + 1;
-    saga_pallet.process_epoch_evolution(current_epoch, &dag_arc).await;
+    saga_pallet
+        .process_epoch_evolution(current_epoch, &dag_arc)
+        .await;
 
     println!("\n--- Simulation Finished Successfully ---");
 

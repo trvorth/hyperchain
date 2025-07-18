@@ -189,7 +189,10 @@ pub enum P2PCommand {
         blocks: Vec<HyperBlock>,
         utxos: HashMap<String, UTXO>,
     },
-    RequestBlock { block_id: String, peer_id: PeerId },
+    RequestBlock {
+        block_id: String,
+        peer_id: PeerId,
+    },
     SendBlockToOnePeer {
         peer_id: PeerId,
         block: Box<HyperBlock>,
@@ -223,6 +226,15 @@ pub struct P2PServer {
     p2p_command_sender: mpsc::Sender<P2PCommand>,
 }
 
+// A collection of rate limiters for different gossipsub topics.
+#[derive(Clone)]
+struct GossipRateLimiters {
+    block: Arc<KeyedPeerRateLimiter>,
+    tx: Arc<KeyedPeerRateLimiter>,
+    state: Arc<KeyedPeerRateLimiter>,
+    credential: Arc<KeyedPeerRateLimiter>,
+}
+
 impl P2PServer {
     #[instrument(skip(config, p2p_command_sender))]
     pub async fn new(
@@ -249,7 +261,8 @@ impl P2PServer {
             }
         }
 
-        let gossipsub_behaviour = Self::build_gossipsub_behaviour(config.local_keypair.clone(), &config.p2p_settings)?;
+        let gossipsub_behaviour =
+            Self::build_gossipsub_behaviour(config.local_keypair.clone(), &config.p2p_settings)?;
         let mdns_behaviour = MdnsTokioBehaviour::new(Default::default(), local_peer_id)
             .map_err(|e| P2PError::Mdns(format!("Failed to create mDNS behaviour: {e}")))?;
 
@@ -322,10 +335,11 @@ impl P2PServer {
                 P2PError::GossipsubConfig(format!("Error building Gossipsub config: {e_str}"))
             })?;
 
-        gossipsub::Behaviour::new(MessageAuthenticity::Signed(local_key), gossipsub_config)
-            .map_err(|e_str| {
+        gossipsub::Behaviour::new(MessageAuthenticity::Signed(local_key), gossipsub_config).map_err(
+            |e_str| {
                 P2PError::GossipsubConfig(format!("Error creating Gossipsub behaviour: {e_str}"))
-            })
+            },
+        )
     }
 
     fn subscribe_to_topics(
@@ -376,11 +390,12 @@ impl P2PServer {
         let mut peer_cache_ticker = interval(Duration::from_secs(300));
         let blacklist = Arc::new(RwLock::new(HashSet::new()));
 
-        let rate_limiter_block = Arc::new(RateLimiter::keyed(Quota::per_second(nonzero!(10u32))));
-        let rate_limiter_tx = Arc::new(RateLimiter::keyed(Quota::per_second(nonzero!(50u32))));
-        let rate_limiter_state = Arc::new(RateLimiter::keyed(Quota::per_second(nonzero!(5u32))));
-        let rate_limiter_credential =
-            Arc::new(RateLimiter::keyed(Quota::per_second(nonzero!(20u32))));
+        let rate_limiters = GossipRateLimiters {
+            block: Arc::new(RateLimiter::keyed(Quota::per_second(nonzero!(10u32)))),
+            tx: Arc::new(RateLimiter::keyed(Quota::per_second(nonzero!(50u32)))),
+            state: Arc::new(RateLimiter::keyed(Quota::per_second(nonzero!(5u32)))),
+            credential: Arc::new(RateLimiter::keyed(Quota::per_second(nonzero!(20u32)))),
+        };
 
         loop {
             tokio::select! {
@@ -389,20 +404,14 @@ impl P2PServer {
                         tokio::spawn({
                             let blacklist = blacklist.clone();
                             let p2p_sender = self.p2p_command_sender.clone();
-                            let rate_limiter_block = rate_limiter_block.clone();
-                            let rate_limiter_tx = rate_limiter_tx.clone();
-                            let rate_limiter_state = rate_limiter_state.clone();
-                            let rate_limiter_credential = rate_limiter_credential.clone();
+                            let rate_limiters = rate_limiters.clone();
                             async move {
                                 Self::static_process_gossip_message(
                                     message,
                                     propagation_source,
                                     blacklist,
                                     p2p_sender,
-                                    rate_limiter_block,
-                                    rate_limiter_tx,
-                                    rate_limiter_state,
-                                    rate_limiter_credential,
+                                    rate_limiters,
                                 )
                                 .await;
                             }
@@ -506,10 +515,7 @@ impl P2PServer {
         source: PeerId,
         blacklist: Arc<RwLock<HashSet<PeerId>>>,
         p2p_command_sender: mpsc::Sender<P2PCommand>,
-        rate_limiter_block: Arc<KeyedPeerRateLimiter>,
-        rate_limiter_tx: Arc<KeyedPeerRateLimiter>,
-        rate_limiter_state: Arc<KeyedPeerRateLimiter>,
-        rate_limiter_credential: Arc<KeyedPeerRateLimiter>,
+        rate_limiters: GossipRateLimiters,
     ) {
         if blacklist.read().await.contains(&source) {
             return;
@@ -517,18 +523,18 @@ impl P2PServer {
 
         let topic_str = message.topic.as_str();
         let rate_limiter_to_use = if topic_str.contains("blocks") {
-            rate_limiter_block
+            &rate_limiters.block
         } else if topic_str.contains("transactions") {
-            rate_limiter_tx
+            &rate_limiters.tx
         } else if topic_str.contains("state_updates") {
-            rate_limiter_state
+            &rate_limiters.state
         } else if topic_str.contains("carbon_credentials") {
-            rate_limiter_credential
+            &rate_limiters.credential
         } else {
             warn!("Received message on unknown topic: {}", topic_str);
             return;
         };
-        
+
         if rate_limiter_to_use.check_key(&source).is_err() {
             let mut blacklist_writer = blacklist.write().await;
             if blacklist_writer.insert(source) {

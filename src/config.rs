@@ -238,7 +238,10 @@ impl Config {
                 "Mining threads must be between 1 and 128".to_string(),
             ));
         }
-        if self.p2p.mesh_n_low > self.p2p.mesh_n || self.p2p.mesh_n > self.p2p.mesh_n_high || self.p2p.mesh_outbound_min > self.p2p.mesh_n_low {
+        if self.p2p.mesh_n_low > self.p2p.mesh_n
+            || self.p2p.mesh_n > self.p2p.mesh_n_high
+            || self.p2p.mesh_outbound_min > self.p2p.mesh_n_low
+        {
             return Err(ConfigError::InvalidParameter(
                 "Invalid mesh parameters: must satisfy mesh_outbound_min <= mesh_n_low <= mesh_n <= mesh_n_high"
                     .to_string(),
