@@ -87,6 +87,7 @@ node*/*.txt
 /node1
 /node2
 /node3
+/integrate_isnm.sh
 
 # --- Language & Framework Specific ---
 # Python

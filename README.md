@@ -105,7 +105,8 @@ The hyperchain repository is a Cargo workspace containing several key components
 * `src/saga.rs`: The AI governance and adaptive security pallet.
 * `src/omega.rs`: The system's core identity and reflex protocol.
 * `src/x_phyrus.rs`: The pre-boot security and diagnostics suite.
-* `src/zk.rs`: (Feature-gated) ZK-proof circuit definitions. 
+* `src/zk.rs`: (Feature-gated) ZK-proof circuit definitions.
+* `src/infinite_strata_node.rs`: Proof-of-Sustained-Cloud-Presence (PoSCP) and cloud-adaptive mining logic.
 * **/src/bin**: Executable crates for the node (start\_node.rs) and wallet (hyperwallet.rs).  
 * **/docs**: Project documentation, including the whitepaper and launch plans.  
 * **config.toml.example**: An example configuration file for the node.
