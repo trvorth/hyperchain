@@ -78,7 +78,7 @@ nalgebra = "0.32.6"
 url = "2.5.2"
 uuid = { version = "1.8.0", features = ["v4", "serde"] }
 chrono = { version = "0.4.38", features = ["serde"] }
-sysinfo = "0.30.12"
+sysinfo = "0.30.13"
 rayon = "1.10.0"
 zstd = "0.13.1"
 bytes = "1.6.0"
@@ -178,5 +178,3 @@ path = "src/bin/omega_test.rs"
 lto = true
 codegen-units = 1
 strip = true
-
-

@@ -1,7 +1,9 @@
+// src/node.rs
+
 //! --- Hyperchain Node Orchestrator ---
-//! v1.5.0 - SAGA Integration Hardened
-//! Resolved ISNM feature integration bug by correctly wiring the service
-//! into the SAGA pallet during node initialization.
+//! v1.5.2 - ISNM Integration Corrected & Cleaned
+//! This version removes the unused `is_stateless` parameter from the ISNM service
+//! initialization to align with the latest module changes and eliminate warnings.
 
 use crate::config::{Config, ConfigError};
 use crate::hyperdag::{HyperBlock, HyperDAG, HyperDAGError, UTXO};
@@ -24,7 +26,7 @@ use axum::{
 };
 use governor::clock::QuantaClock;
 use governor::state::{InMemoryState, NotKeyed};
-use governor::{Quota, RateLimiter}; // FIX: Use Quota explicitly
+use governor::{Quota, RateLimiter};
 use libp2p::identity;
 use libp2p::PeerId;
 use nonzero_ext::nonzero;
@@ -47,7 +49,10 @@ use tracing::{debug, error, info, instrument, warn};
 
 // Import ISNM components when the 'infinite-strata' feature is enabled.
 #[cfg(feature = "infinite-strata")]
-use crate::infinite_strata_node::{InfiniteStrataNode, MIN_UPTIME_HEARTBEAT_SECS};
+use crate::infinite_strata_node::{
+    DecentralizedOracleAggregator, InfiniteStrataNode, NodeConfig as IsnmNodeConfig,
+    MIN_UPTIME_HEARTBEAT_SECS,
+};
 
 // Constants defining node limits and validation rules.
 const MAX_UTXOS: usize = 1_000_000;
@@ -213,16 +218,14 @@ impl Node {
 
         info!("Initializing SAGA and dependent services...");
 
-        // --- FIX: Correctly initialize ISNM service and SAGA pallet ---
-        // Conditionally initialize the ISNM service.
         #[cfg(feature = "infinite-strata")]
         let isnm_service = {
             info!("[ISNM] Infinite Strata feature enabled, initializing service.");
-            Arc::new(InfiniteStrataNode::new())
+            let isnm_config = IsnmNodeConfig::default();
+            let oracle_aggregator = DecentralizedOracleAggregator::new();
+            Arc::new(InfiniteStrataNode::new(isnm_config, oracle_aggregator))
         };
 
-        // Initialize the SAGA pallet, conditionally passing the ISNM service.
-        // This corrected logic resolves the build error.
         let saga_pallet = {
             #[cfg(feature = "infinite-strata")]
             {
@@ -233,7 +236,6 @@ impl Node {
                 Arc::new(PalletSaga::new())
             }
         };
-        // --- End FIX ---
 
         info!("Initializing HyperDAG (loading database)...");
         let db = {
@@ -250,8 +252,7 @@ impl Node {
             &node_signing_key_bytes,
             saga_pallet.clone(),
             db,
-        )
-        .map_err(|e| NodeError::DAG(e.to_string()))?;
+        )?;
 
         info!("HyperDAG initialized.");
 
@@ -274,7 +275,7 @@ impl Node {
                         tx_id: genesis_id_convention,
                         output_index: 0,
                         explorer_link: format!(
-                            "[https://hyperblockexplorer.org/utxo/](https://hyperblockexplorer.org/utxo/){utxo_id}"
+                            "https://hyperblockexplorer.org/utxo/{utxo_id}"
                         ),
                     },
                 );
@@ -307,7 +308,6 @@ impl Node {
             proposals,
             peer_cache_path,
             saga_pallet,
-            // Add the isnm_service field to the initializer, gated by the feature flag.
             #[cfg(feature = "infinite-strata")]
             isnm_service,
         })
@@ -318,13 +318,11 @@ impl Node {
         let mut join_set: JoinSet<Result<(), NodeError>> = JoinSet::new();
 
         // --- ISNM Periodic Check Task ---
-        // If the feature is enabled, spawn a background task to run the ISNM heartbeat.
         #[cfg(feature = "infinite-strata")]
         {
             info!("[ISNM] Spawning periodic cloud presence check task.");
             let isnm_service_clone = self.isnm_service.clone();
             join_set.spawn(async move {
-                // Give a small delay at startup to avoid resource contention.
                 tokio::time::sleep(Duration::from_secs(10)).await;
                 let mut interval =
                     tokio::time::interval(Duration::from_secs(MIN_UPTIME_HEARTBEAT_SECS));
@@ -560,7 +558,6 @@ impl Node {
             };
             async move {
                 let rate_limiter: Arc<DirectApiRateLimiter> =
-                    // FIX: Construct Quota explicitly
                     Arc::new(RateLimiter::direct(Quota::per_second(nonzero!(50u32))));
                 let app = Router::new()
                     .route("/info", get(info_handler))
@@ -667,7 +664,9 @@ impl Node {
                     }
                 }
             }
-            sorted_blocks.push(block_map.get(&id).unwrap().clone());
+            if let Some(block) = block_map.get(&id) {
+                sorted_blocks.push(block.clone());
+            }
         }
         if sorted_blocks.len() != block_map.len() {
             error!(
